@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.13.0
+// @version      0.13.2
 // @description  友達と一緒に Prime Video を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @noframes
@@ -64,6 +64,9 @@ const WP_US = (() => {
     };
     const GTI_RE = /^amzn1\.dv\.gti\.[0-9a-f-]{36}$/;
     const MAX_SEC = 24 * 3600;
+    // Android の準備で開く、決まったアドレス
+    const FIREFOX_PLAY_URL = 'https://play.google.com/store/apps/details?id=org.mozilla.firefox';
+    const VIOLENTMONKEY_URL = 'https://addons.mozilla.org/ja/android/addon/violentmonkey/';
 
     /** サーバーから届いた作品情報を検査して、使える形だけ返す。駄目なら null */
     function cleanVideo(v) {
@@ -125,8 +128,22 @@ const WP_US = (() => {
             if (v.service !== 'prime') return null;
             const path = `www.amazon.co.jp/gp/video/detail/${enc(v.contentId)}/` +
                 `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}`;
-            // Android は amazon.co.jp をアプリに横取りされるので、Chrome で開けと明示する
-            return android ? `intent://${path}#Intent;scheme=https;package=com.android.chrome;end` : `https://${path}`;
+            /*
+             * Android は **Firefox で開く**（2026-09-14）。Chrome は拡張機能が使えず、自動で合わせるスクリプトが動かない。
+             * Firefox なら Violentmonkey で同じスクリプトが動く。intent:// でアプリを指定し、
+             * Firefox が入っていなければ Google Play の Firefox のページへ回す。
+             */
+            return android ? urls.firefox(`https://${path}`) : `https://${path}`;
+        },
+
+        /**
+         * Android で、決まったアドレスを Firefox で開く形（intent://）。
+         * href は https:// で始まる、このファイルで組み立てた決まったアドレスだけを渡すこと。
+         */
+        firefox(href) {
+            if (!/^https:\/\//.test(href)) return null;
+            return `intent://${href.slice('https://'.length)}#Intent;scheme=https;package=org.mozilla.firefox;` +
+                `S.browser_fallback_url=${enc(FIREFOX_PLAY_URL)};end`;
         },
 
         /** 時刻を付けずに開く形 */
@@ -174,7 +191,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, cleanVideo, cleanSec, cleanRoom, hhmmss, urls, safeColor, isReaction, messageRow, connect };
+    return { SERVER, cleanVideo, cleanSec, cleanRoom, hhmmss, urls, safeColor, isReaction, messageRow, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -406,10 +423,48 @@ const WP_SHIM = (() => {
             q('.fab').hidden = open;
             if (open) {
                 unread = 0;
+                placePanel();
                 q('.msgs').scrollTop = q('.msgs').scrollHeight;
             }
             renderBadge();
         }
+
+        /*
+         * チャット欄を動画に重ならない所に置く（2026-09-14 Android 実機：動画が画面の真ん中にあり、
+         * 下に重ねたチャット欄が動画を隠して使いにくかった）。
+         *   - 動画の下に十分な空きがある（縦持ち）→ 動画のすぐ下から画面の下までをチャット欄にする
+         *   - 空きが足りない（横持ち・全画面など）→ 下に重ねるが、高さを抑える
+         * キーボードが出ると見えている高さ（visualViewport）が縮むので、そのたびに置き直す。
+         */
+        const MIN_PANEL_PX = 170;
+        function placePanel() {
+            if (!open) return;
+            const panel = q('.panel');
+            const vv = globalThis.visualViewport;
+            const viewH = vv ? vv.height : window.innerHeight;
+            const viewTop = vv ? vv.offsetTop : 0;
+            const video = layoutVideo();
+            const r = video ? video.getBoundingClientRect() : null;
+            const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
+            const room = viewH - below - 16;
+            if (r && r.height > 0 && room >= MIN_PANEL_PX) {
+                panel.style.top = `${viewTop + below + 8}px`;
+                panel.style.bottom = 'auto';
+                panel.style.height = `${room}px`;
+                panel.dataset.place = 'below-video';
+            } else {
+                panel.style.top = 'auto';
+                panel.style.bottom = `${Math.max(8, window.innerHeight - viewTop - viewH + 8)}px`;
+                panel.style.height = `${Math.round(Math.min(viewH * 0.45, 420))}px`;
+                panel.dataset.place = 'overlay';
+            }
+        }
+        globalThis.visualViewport?.addEventListener('resize', placePanel);
+        globalThis.visualViewport?.addEventListener('scroll', placePanel);
+        window.addEventListener('resize', placePanel);
+        window.addEventListener('orientationchange', () => setTimeout(placePanel, 300));
+        // プレイヤーの大きさはページの作りで後から変わるので、開いている間はときどき測り直す
+        setInterval(placePanel, 1000);
         function renderBadge() {
             q('.badge').hidden = unread === 0;
             q('.badge').textContent = unread > 99 ? '99+' : String(unread);
@@ -477,6 +532,18 @@ const WP_SHIM = (() => {
     }
 
     /** 本編の <video>。拡張機能と同じ基準（5分以上で最長） */
+    /** 画面に見えている一番大きな <video>（チャット欄の置き場所を決める用。長さが分からなくてもよい） */
+    function layoutVideo() {
+        let best = null;
+        let area = 0;
+        for (const v of document.querySelectorAll('video')) {
+            const r = v.getBoundingClientRect();
+            const a = Math.max(0, r.width) * Math.max(0, r.height);
+            if (a > area) { area = a; best = v; }
+        }
+        return best;
+    }
+
     function mainVideo() {
         const vids = Array.from(document.querySelectorAll('video'))
             .filter(v => Number.isFinite(v.duration) && v.duration >= 300);
