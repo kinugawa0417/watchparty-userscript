@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.13.3
+// @version      0.13.4
 // @description  友達と一緒に Prime Video を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @noframes
@@ -13,6 +13,8 @@
 (function () {
     'use strict';
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
+    // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
+    const __WP_VERSION__ = "0.13.4";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -402,7 +404,7 @@ const WP_SHIM = (() => {
             </div>
             <button class="fab">💬<span class="badge" hidden></span></button>
             <div class="panel" hidden>
-                <div class="phead"><span>チャット</span><button class="close" aria-label="閉じる">✕</button></div>
+                <div class="phead"><span>チャット <small class="ver"></small></span><button class="close" aria-label="閉じる">✕</button></div>
                 <div class="msgs"></div>
                 <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
             </div>`;
@@ -412,6 +414,7 @@ const WP_SHIM = (() => {
             host.addEventListener(t, (e) => e.stopPropagation());
         }
         const q = (s) => root.querySelector(s);
+        q('.ver').textContent = typeof __WP_VERSION__ === 'string' ? 'v' + __WP_VERSION__ : '';
 
         // --- チャット -----------------------------------------------------------
         let open = false;
@@ -445,7 +448,10 @@ const WP_SHIM = (() => {
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) topAlign(video, portrait);
+            if (video) {
+                topAlign(video, portrait);
+                shiftUp(video, portrait);
+            }
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
@@ -460,6 +466,37 @@ const WP_SHIM = (() => {
                 panel.style.height = `${Math.round(Math.min(viewH * 0.45, 420))}px`;
                 panel.dataset.place = 'overlay';
             }
+            reportLayout(video, r, panel);
+        }
+
+        /*
+         * 映像の置かれ方をサーバーのログに送る（数と CSS の決まった値だけ。個人情報は含まない）。
+         * Android 実機で「映像が上に行かない」が起きたが、PC の本物のプレイヤーでは再現しなかったため（2026-09-14）。
+         * 置き場所が変わったときと、開いてから最初の1回だけ送る。
+         */
+        let lastReport = '';
+        function reportLayout(video, r, panel) {
+            if (!connected) return;
+            const box = (b) => (b ? { x: b.left ?? b.x, y: b.top ?? b.y, w: b.width, h: b.height } : null);
+            const key = `${panel.dataset.place}|${Math.round(r ? r.top : -1)}|${window.innerWidth}x${window.innerHeight}`;
+            if (key === lastReport) return;
+            lastReport = key;
+            const parents = [];
+            for (let el = video && video.parentElement; el && parents.length < 4; el = el.parentElement) {
+                parents.push(box(el.getBoundingClientRect()));
+            }
+            const cs = video ? getComputedStyle(video) : null;
+            socket.emit('layout-report', {
+                version: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '',
+                view: { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight },
+                video: video ? box(video.getBoundingClientRect()) : null,
+                vw: video ? video.videoWidth : null, vh: video ? video.videoHeight : null,
+                fit: cs ? cs.objectFit : '', pos: cs ? cs.objectPosition : '',
+                shift: video ? Number(video.dataset.wpShift || 0) : null,
+                place: panel.dataset.place, panel: box(panel.getBoundingClientRect()),
+                parents, count: document.querySelectorAll('video').length,
+                ua: navigator.userAgent
+            });
         }
         globalThis.visualViewport?.addEventListener('resize', placePanel);
         globalThis.visualViewport?.addEventListener('scroll', placePanel);
@@ -545,6 +582,24 @@ const WP_SHIM = (() => {
         if (want) video.style.setProperty('object-position', want, 'important');
         else video.style.removeProperty('object-position');
         video.dataset.wpTop = want;
+    }
+
+    /*
+     * それでも映像が上に来ないとき（箱そのものが画面の真ん中に置かれている作り）は、箱ごと上へずらす。
+     * どれだけずらしたかを覚えておき、測り直すたびに元の位置から計算し直す（ずらしが積み重ならないように）。
+     */
+    function shiftUp(video, portrait) {
+        const applied = Number(video.dataset.wpShift || 0);
+        let want = 0;
+        if (portrait) {
+            const r = contentRect(video);
+            const originalTop = r.top + applied;          // ずらす前の、映像の上端
+            if (originalTop > 8) want = Math.round(originalTop);
+        }
+        if (want === applied) return;
+        if (want) video.style.setProperty('transform', `translateY(-${want}px)`, 'important');
+        else video.style.removeProperty('transform');
+        video.dataset.wpShift = String(want);
     }
 
     /**
