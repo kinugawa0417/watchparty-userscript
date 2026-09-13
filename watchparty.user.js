@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.11.1
+// @version      0.12.3
 // @description  友達と一緒に Prime Video を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @noframes
@@ -174,9 +174,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    const REACTIONS = ['😂', '😱', '😭', '👏', '❤️'];
-
-    return { SERVER, cleanVideo, cleanSec, cleanRoom, hhmmss, urls, safeColor, isReaction, messageRow, connect, REACTIONS };
+    return { SERVER, cleanVideo, cleanSec, cleanRoom, hhmmss, urls, safeColor, isReaction, messageRow, connect };
 })();
 
 
@@ -372,9 +370,6 @@ const WP_SHIM = (() => {
                 .msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
                 .msg.system { color: #9a9aa6; font-size: 12px; text-align: center; }
                 .msg.big .body { font-size: 24px; line-height: 1.2; }
-                .reactions { display: flex; gap: 4px; }
-                .reactions button { flex: 1; border: 1px solid #2c2c36; background: #1a1a21; border-radius: 8px;
-                                    font-size: 20px; min-height: 40px; }
                 form { display: flex; gap: 6px; }
                 input { flex: 1; min-width: 0; font-size: 16px; padding: 10px; border-radius: 8px;
                         border: 1px solid #2c2c36; background: #1a1a21; color: #f2f2f4; }
@@ -390,7 +385,6 @@ const WP_SHIM = (() => {
             <div class="panel" hidden>
                 <div class="phead"><span>チャット</span><button class="close" aria-label="閉じる">✕</button></div>
                 <div class="msgs"></div>
-                <div class="reactions"></div>
                 <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
             </div>`;
         (document.body || document.documentElement).appendChild(host);
@@ -439,13 +433,6 @@ const WP_SHIM = (() => {
             socket.emit('send-message', { message: text });
             input.value = '';
         });
-        for (const r of U.REACTIONS) {
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.textContent = r;
-            b.addEventListener('click', () => { if (connected) socket.emit('send-message', { message: r }); });
-            q('.reactions').appendChild(b);
-        }
 
         // --- 再生が止められたとき ------------------------------------------------
         // iPhone は、人が触っていないと動画を再生できないことがある。
