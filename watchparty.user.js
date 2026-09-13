@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.13.4
+// @version      0.14.0
 // @description  友達と一緒に Prime Video を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
+// @match        https://www.primevideo.com/*
 // @noframes
 // @run-at       document-idle
 // @inject-into  page
@@ -14,7 +15,7 @@
     'use strict';
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.13.4";
+    const __WP_VERSION__ = "0.14.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -139,6 +140,18 @@ const WP_US = (() => {
         },
 
         /**
+         * Prime Video だけ契約の人（primevideo.com のアカウント。海外など）向けに、primevideo.com で開く形（2026-09-14）。
+         * amazon.co.jp にはログインできないので、こちらで開く。作品 ID は国をまたいで同じ作品を指す GTI があればそれ、
+         * 無ければ ASIN（primevideo.com/detail/<ASIN>/ でも同じ作品が開くことを確認済み）。
+         */
+        primeVideoWeb(v, room, name, android) {
+            if (v.service !== 'prime') return null;
+            const path = `www.primevideo.com/detail/${enc(v.appId || v.contentId)}/` +
+                `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}`;
+            return android ? urls.firefox(`https://${path}`) : `https://${path}`;
+        },
+
+        /**
          * Android で、決まったアドレスを Firefox で開く形（intent://）。
          * href は https:// で始まる、このファイルで組み立てた決まったアドレスだけを渡すこと。
          */
@@ -146,6 +159,17 @@ const WP_US = (() => {
             if (!/^https:\/\//.test(href)) return null;
             return `intent://${href.slice('https://'.length)}#Intent;scheme=https;package=org.mozilla.firefox;` +
                 `S.browser_fallback_url=${enc(FIREFOX_PLAY_URL)};end`;
+        },
+
+        /**
+         * iPhone の Netflix で使う、アプリ専用の形（時刻付き）。
+         * https://www.netflix.com/watch/ID?t=秒 は、Netflix のタスクが残っているとアプリが時刻を使わず、
+         * アプリ内の今の位置のまま出した。この形はタスクを切らずにホストの場面へ移った（2026-09-14 実機で確認）。
+         */
+        netflixScheme(v, t) {
+            if (v.service !== 'netflix') return null;
+            const sec = Math.max(0, Math.min(MAX_SEC, Math.round(t) || 0));
+            return `nflx://www.netflix.com/watch/${enc(v.contentId)}?t=${sec}`;
         },
 
         /** 時刻を付けずに開く形 */
@@ -197,7 +221,8 @@ const WP_US = (() => {
 })();
 
 
-    if (location.hostname !== 'www.amazon.co.jp') return;
+    // amazon.co.jp と、Prime Video だけ契約の人の primevideo.com
+    if (location.hostname !== 'www.amazon.co.jp' && location.hostname !== 'www.primevideo.com') return;
 
     // ---- userscript/shim.js ----
 /**
@@ -221,7 +246,8 @@ const WP_SHIM = (() => {
     const SRC_UI = 'wp-ui';
     const KEY = 'wp:userscript';
     const PLAY_BLOCKED_MS = 3000;
-    const AMAZON_DETAIL = /\/gp\/video\/detail\/([A-Za-z0-9.]{10,80})(?=[/?#]|$)/;
+    // 作品ページのアドレス。amazon.co.jp の /gp/video/detail/ID と、primevideo.com の /detail/ID（GTI は - を含む）
+    const AMAZON_DETAIL = /\/(?:gp\/video\/)?detail\/([A-Za-z0-9.-]{10,80})(?=[/?#]|$)/;
     const SYNC_TYPES = new Set(['play', 'pause', 'seek', 'tick']);
 
     /** このタブが見るルーム。無ければ null（何もしない） */
@@ -268,7 +294,8 @@ const WP_SHIM = (() => {
         function sameTitle(v) {
             if (v.service !== 'prime') return false;
             if (!target.contentId) return true;   // このページの作品が分からないときは止めない
-            return v.contentId === target.contentId;
+            // primevideo.com では GTI（Amazon 内部の作品 ID）で開くので、ホストの GTI とも比べる
+            return v.contentId === target.contentId || (Boolean(v.appId) && v.appId === target.contentId);
         }
 
         // --- サーバー ---------------------------------------------------------
@@ -331,6 +358,15 @@ const WP_SHIM = (() => {
         });
 
         socket.on('change-video', (v) => checkTitle(v));
+        // ホストの GTI はあとから届く。このページが GTI で開かれていて一致したら、同じ作品として合わせ直す
+        socket.on('video-meta', (m) => {
+            if (!m || typeof m !== 'object' || !otherVideo || otherVideo.service !== 'prime') return;
+            if (m.contentId === otherVideo.contentId && typeof m.appId === 'string' && m.appId === target.contentId) {
+                otherVideo = null;
+                socket.emit('request-sync');
+                render();
+            }
+        });
         socket.on('receive-message', (m) => { if (m && typeof m === 'object') addMessage(m); });
 
         // --- bridge.js から ---------------------------------------------------
@@ -558,7 +594,9 @@ const WP_SHIM = (() => {
                 : 'ホストに自動で合わせています';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
             const other = q('.other');
-            const url = otherVideo ? U.urls.primeWeb(otherVideo, target.room, target.name, false) : null;
+            // 今と同じサイト（amazon.co.jp / primevideo.com）で開く
+            const openOther = location.hostname === 'www.primevideo.com' ? U.urls.primeVideoWeb : U.urls.primeWeb;
+            const url = otherVideo ? openOther(otherVideo, target.room, target.name, false) : null;
             if (url) {
                 other.href = url;
                 other.textContent = '▶ ホストの作品を開く';
