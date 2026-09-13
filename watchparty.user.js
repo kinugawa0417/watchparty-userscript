@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.13.2
+// @version      0.13.3
 // @description  友達と一緒に Prime Video を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @noframes
@@ -444,7 +444,9 @@ const WP_SHIM = (() => {
             const viewH = vv ? vv.height : window.innerHeight;
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
-            const r = video ? video.getBoundingClientRect() : null;
+            const portrait = window.innerHeight > window.innerWidth;
+            if (video) topAlign(video, portrait);
+            const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
             if (r && r.height > 0 && room >= MIN_PANEL_PX) {
@@ -532,8 +534,42 @@ const WP_SHIM = (() => {
     }
 
     /** 本編の <video>。拡張機能と同じ基準（5分以上で最長） */
+    /*
+     * 縦持ちでは、映像をプレイヤーの一番上に寄せる（2026-09-14 ユーザー要望）。
+     * Amazon のプレイヤーは画面の高さいっぱいの箱で、映像はその真ん中に出る（Android 実機のスクリーンショット）。
+     * 箱はそのままで、映像の出る位置（object-position）だけを上に寄せる。横持ちでは元に戻す。
+     */
+    function topAlign(video, portrait) {
+        const want = portrait ? 'center top' : '';
+        if (video.dataset.wpTop === want) return;
+        if (want) video.style.setProperty('object-position', want, 'important');
+        else video.style.removeProperty('object-position');
+        video.dataset.wpTop = want;
+    }
+
+    /**
+     * 実際に映像が映っている範囲。映像は箱の中に縦横比を保って収まる（object-fit: contain）ので、
+     * 箱の大きさと映像の縦横比から計算する。縦横比が分からないとき（読み込み前）は箱そのもの。
+     */
+    function contentRect(video) {
+        const box = video.getBoundingClientRect();
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (!vw || !vh || !box.width || !box.height) return box;
+        const scale = Math.min(box.width / vw, box.height / vh);
+        const h = vh * scale;
+        const top = video.dataset.wpTop ? box.top : box.top + (box.height - h) / 2;
+        return { top, bottom: top + h, height: h, width: vw * scale, left: box.left };
+    }
+
     /** 画面に見えている一番大きな <video>（チャット欄の置き場所を決める用。長さが分からなくてもよい） */
     function layoutVideo() {
+        // 本編（5分以上の動画）が画面に出ていればそれ。Amazon のページには予告などの別の <video> もある
+        const main = mainVideo();
+        if (main) {
+            const r = main.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return main;
+        }
         let best = null;
         let area = 0;
         for (const v of document.querySelectorAll('video')) {
