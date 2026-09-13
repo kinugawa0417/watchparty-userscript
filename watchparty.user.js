@@ -1,0 +1,2314 @@
+// ==UserScript==
+// @name         Watch Party
+// @namespace    watchparty-fixed
+// @version      0.11.1
+// @description  友達と一緒に動画を見るための固定版スクリプト。https://example.com/#wp で開く画面と、Prime Video の自動合わせ。
+// @match        https://example.com/*
+// @match        https://www.amazon.co.jp/*
+// @noframes
+// @run-at       document-idle
+// @inject-into  page
+// @grant        none
+// ==/UserScript==
+
+(function () {
+    'use strict';
+    const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
+
+    // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
+    // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
+    const __WP_IO__ = (function () {
+        const had = Object.prototype.hasOwnProperty.call(globalThis, 'io');
+        const prev = globalThis.io;
+        (function (exports, module, define) {
+/*!
+ * Socket.IO v4.8.3
+ * (c) 2014-2025 Guillermo Rauch
+ * Released under the MIT License.
+ */
+!function(t,n){"object"==typeof exports&&"undefined"!=typeof module?module.exports=n():"function"==typeof define&&define.amd?define(n):(t="undefined"!=typeof globalThis?globalThis:t||self).io=n()}(this,(function(){"use strict";function t(t,n){(null==n||n>t.length)&&(n=t.length);for(var i=0,r=Array(n);i<n;i++)r[i]=t[i];return r}function n(t,n){for(var i=0;i<n.length;i++){var r=n[i];r.enumerable=r.enumerable||!1,r.configurable=!0,"value"in r&&(r.writable=!0),Object.defineProperty(t,f(r.key),r)}}function i(t,i,r){return i&&n(t.prototype,i),r&&n(t,r),Object.defineProperty(t,"prototype",{writable:!1}),t}function r(n,i){var r="undefined"!=typeof Symbol&&n[Symbol.iterator]||n["@@iterator"];if(!r){if(Array.isArray(n)||(r=function(n,i){if(n){if("string"==typeof n)return t(n,i);var r={}.toString.call(n).slice(8,-1);return"Object"===r&&n.constructor&&(r=n.constructor.name),"Map"===r||"Set"===r?Array.from(n):"Arguments"===r||/^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(r)?t(n,i):void 0}}(n))||i&&n&&"number"==typeof n.length){r&&(n=r);var e=0,o=function(){};return{s:o,n:function(){return e>=n.length?{done:!0}:{done:!1,value:n[e++]}},e:function(t){throw t},f:o}}throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.")}var s,u=!0,h=!1;return{s:function(){r=r.call(n)},n:function(){var t=r.next();return u=t.done,t},e:function(t){h=!0,s=t},f:function(){try{u||null==r.return||r.return()}finally{if(h)throw s}}}}function e(){return e=Object.assign?Object.assign.bind():function(t){for(var n=1;n<arguments.length;n++){var i=arguments[n];for(var r in i)({}).hasOwnProperty.call(i,r)&&(t[r]=i[r])}return t},e.apply(null,arguments)}function o(t){return o=Object.setPrototypeOf?Object.getPrototypeOf.bind():function(t){return t.__proto__||Object.getPrototypeOf(t)},o(t)}function s(t,n){t.prototype=Object.create(n.prototype),t.prototype.constructor=t,h(t,n)}function u(){try{var t=!Boolean.prototype.valueOf.call(Reflect.construct(Boolean,[],(function(){})))}catch(t){}return(u=function(){return!!t})()}function h(t,n){return h=Object.setPrototypeOf?Object.setPrototypeOf.bind():function(t,n){return t.__proto__=n,t},h(t,n)}function f(t){var n=function(t,n){if("object"!=typeof t||!t)return t;var i=t[Symbol.toPrimitive];if(void 0!==i){var r=i.call(t,n||"default");if("object"!=typeof r)return r;throw new TypeError("@@toPrimitive must return a primitive value.")}return("string"===n?String:Number)(t)}(t,"string");return"symbol"==typeof n?n:n+""}function c(t){return c="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(t){return typeof t}:function(t){return t&&"function"==typeof Symbol&&t.constructor===Symbol&&t!==Symbol.prototype?"symbol":typeof t},c(t)}function a(t){var n="function"==typeof Map?new Map:void 0;return a=function(t){if(null===t||!function(t){try{return-1!==Function.toString.call(t).indexOf("[native code]")}catch(n){return"function"==typeof t}}(t))return t;if("function"!=typeof t)throw new TypeError("Super expression must either be null or a function");if(void 0!==n){if(n.has(t))return n.get(t);n.set(t,i)}function i(){return function(t,n,i){if(u())return Reflect.construct.apply(null,arguments);var r=[null];r.push.apply(r,n);var e=new(t.bind.apply(t,r));return i&&h(e,i.prototype),e}(t,arguments,o(this).constructor)}return i.prototype=Object.create(t.prototype,{constructor:{value:i,enumerable:!1,writable:!0,configurable:!0}}),h(i,t)},a(t)}var v=Object.create(null);v.open="0",v.close="1",v.ping="2",v.pong="3",v.message="4",v.upgrade="5",v.noop="6";var l=Object.create(null);Object.keys(v).forEach((function(t){l[v[t]]=t}));var p,d={type:"error",data:"parser error"},y="function"==typeof Blob||"undefined"!=typeof Blob&&"[object BlobConstructor]"===Object.prototype.toString.call(Blob),b="function"==typeof ArrayBuffer,w=function(t){return"function"==typeof ArrayBuffer.isView?ArrayBuffer.isView(t):t&&t.buffer instanceof ArrayBuffer},g=function(t,n,i){var r=t.type,e=t.data;return y&&e instanceof Blob?n?i(e):m(e,i):b&&(e instanceof ArrayBuffer||w(e))?n?i(e):m(new Blob([e]),i):i(v[r]+(e||""))},m=function(t,n){var i=new FileReader;return i.onload=function(){var t=i.result.split(",")[1];n("b"+(t||""))},i.readAsDataURL(t)};function k(t){return t instanceof Uint8Array?t:t instanceof ArrayBuffer?new Uint8Array(t):new Uint8Array(t.buffer,t.byteOffset,t.byteLength)}for(var A="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",j="undefined"==typeof Uint8Array?[]:new Uint8Array(256),E=0;E<64;E++)j[A.charCodeAt(E)]=E;var O,B="function"==typeof ArrayBuffer,S=function(t,n){if("string"!=typeof t)return{type:"message",data:C(t,n)};var i=t.charAt(0);return"b"===i?{type:"message",data:N(t.substring(1),n)}:l[i]?t.length>1?{type:l[i],data:t.substring(1)}:{type:l[i]}:d},N=function(t,n){if(B){var i=function(t){var n,i,r,e,o,s=.75*t.length,u=t.length,h=0;"="===t[t.length-1]&&(s--,"="===t[t.length-2]&&s--);var f=new ArrayBuffer(s),c=new Uint8Array(f);for(n=0;n<u;n+=4)i=j[t.charCodeAt(n)],r=j[t.charCodeAt(n+1)],e=j[t.charCodeAt(n+2)],o=j[t.charCodeAt(n+3)],c[h++]=i<<2|r>>4,c[h++]=(15&r)<<4|e>>2,c[h++]=(3&e)<<6|63&o;return f}(t);return C(i,n)}return{base64:!0,data:t}},C=function(t,n){return"blob"===n?t instanceof Blob?t:new Blob([t]):t instanceof ArrayBuffer?t:t.buffer},T=String.fromCharCode(30);function U(){return new TransformStream({transform:function(t,n){!function(t,n){y&&t.data instanceof Blob?t.data.arrayBuffer().then(k).then(n):b&&(t.data instanceof ArrayBuffer||w(t.data))?n(k(t.data)):g(t,!1,(function(t){p||(p=new TextEncoder),n(p.encode(t))}))}(t,(function(i){var r,e=i.length;if(e<126)r=new Uint8Array(1),new DataView(r.buffer).setUint8(0,e);else if(e<65536){r=new Uint8Array(3);var o=new DataView(r.buffer);o.setUint8(0,126),o.setUint16(1,e)}else{r=new Uint8Array(9);var s=new DataView(r.buffer);s.setUint8(0,127),s.setBigUint64(1,BigInt(e))}t.data&&"string"!=typeof t.data&&(r[0]|=128),n.enqueue(r),n.enqueue(i)}))}})}function M(t){return t.reduce((function(t,n){return t+n.length}),0)}function x(t,n){if(t[0].length===n)return t.shift();for(var i=new Uint8Array(n),r=0,e=0;e<n;e++)i[e]=t[0][r++],r===t[0].length&&(t.shift(),r=0);return t.length&&r<t[0].length&&(t[0]=t[0].slice(r)),i}function I(t){if(t)return function(t){for(var n in I.prototype)t[n]=I.prototype[n];return t}(t)}I.prototype.on=I.prototype.addEventListener=function(t,n){return this.t=this.t||{},(this.t["$"+t]=this.t["$"+t]||[]).push(n),this},I.prototype.once=function(t,n){function i(){this.off(t,i),n.apply(this,arguments)}return i.fn=n,this.on(t,i),this},I.prototype.off=I.prototype.removeListener=I.prototype.removeAllListeners=I.prototype.removeEventListener=function(t,n){if(this.t=this.t||{},0==arguments.length)return this.t={},this;var i,r=this.t["$"+t];if(!r)return this;if(1==arguments.length)return delete this.t["$"+t],this;for(var e=0;e<r.length;e++)if((i=r[e])===n||i.fn===n){r.splice(e,1);break}return 0===r.length&&delete this.t["$"+t],this},I.prototype.emit=function(t){this.t=this.t||{};for(var n=new Array(arguments.length-1),i=this.t["$"+t],r=1;r<arguments.length;r++)n[r-1]=arguments[r];if(i){r=0;for(var e=(i=i.slice(0)).length;r<e;++r)i[r].apply(this,n)}return this},I.prototype.emitReserved=I.prototype.emit,I.prototype.listeners=function(t){return this.t=this.t||{},this.t["$"+t]||[]},I.prototype.hasListeners=function(t){return!!this.listeners(t).length};var R="function"==typeof Promise&&"function"==typeof Promise.resolve?function(t){return Promise.resolve().then(t)}:function(t,n){return n(t,0)},L="undefined"!=typeof self?self:"undefined"!=typeof window?window:Function("return this")();function _(t){for(var n=arguments.length,i=new Array(n>1?n-1:0),r=1;r<n;r++)i[r-1]=arguments[r];return i.reduce((function(n,i){return t.hasOwnProperty(i)&&(n[i]=t[i]),n}),{})}var D=L.setTimeout,P=L.clearTimeout;function $(t,n){n.useNativeTimers?(t.setTimeoutFn=D.bind(L),t.clearTimeoutFn=P.bind(L)):(t.setTimeoutFn=L.setTimeout.bind(L),t.clearTimeoutFn=L.clearTimeout.bind(L))}function F(){return Date.now().toString(36).substring(3)+Math.random().toString(36).substring(2,5)}var V=function(t){function n(n,i,r){var e;return(e=t.call(this,n)||this).description=i,e.context=r,e.type="TransportError",e}return s(n,t),n}(a(Error)),q=function(t){function n(n){var i;return(i=t.call(this)||this).writable=!1,$(i,n),i.opts=n,i.query=n.query,i.socket=n.socket,i.supportsBinary=!n.forceBase64,i}s(n,t);var i=n.prototype;return i.onError=function(n,i,r){return t.prototype.emitReserved.call(this,"error",new V(n,i,r)),this},i.open=function(){return this.readyState="opening",this.doOpen(),this},i.close=function(){return"opening"!==this.readyState&&"open"!==this.readyState||(this.doClose(),this.onClose()),this},i.send=function(t){"open"===this.readyState&&this.write(t)},i.onOpen=function(){this.readyState="open",this.writable=!0,t.prototype.emitReserved.call(this,"open")},i.onData=function(t){var n=S(t,this.socket.binaryType);this.onPacket(n)},i.onPacket=function(n){t.prototype.emitReserved.call(this,"packet",n)},i.onClose=function(n){this.readyState="closed",t.prototype.emitReserved.call(this,"close",n)},i.pause=function(t){},i.createUri=function(t){var n=arguments.length>1&&void 0!==arguments[1]?arguments[1]:{};return t+"://"+this.i()+this.o()+this.opts.path+this.u(n)},i.i=function(){var t=this.opts.hostname;return-1===t.indexOf(":")?t:"["+t+"]"},i.o=function(){return this.opts.port&&(this.opts.secure&&443!==Number(this.opts.port)||!this.opts.secure&&80!==Number(this.opts.port))?":"+this.opts.port:""},i.u=function(t){var n=function(t){var n="";for(var i in t)t.hasOwnProperty(i)&&(n.length&&(n+="&"),n+=encodeURIComponent(i)+"="+encodeURIComponent(t[i]));return n}(t);return n.length?"?"+n:""},n}(I),X=function(t){function n(){var n;return(n=t.apply(this,arguments)||this).h=!1,n}s(n,t);var r=n.prototype;return r.doOpen=function(){this.v()},r.pause=function(t){var n=this;this.readyState="pausing";var i=function(){n.readyState="paused",t()};if(this.h||!this.writable){var r=0;this.h&&(r++,this.once("pollComplete",(function(){--r||i()}))),this.writable||(r++,this.once("drain",(function(){--r||i()})))}else i()},r.v=function(){this.h=!0,this.doPoll(),this.emitReserved("poll")},r.onData=function(t){var n=this;(function(t,n){for(var i=t.split(T),r=[],e=0;e<i.length;e++){var o=S(i[e],n);if(r.push(o),"error"===o.type)break}return r})(t,this.socket.binaryType).forEach((function(t){if("opening"===n.readyState&&"open"===t.type&&n.onOpen(),"close"===t.type)return n.onClose({description:"transport closed by the server"}),!1;n.onPacket(t)})),"closed"!==this.readyState&&(this.h=!1,this.emitReserved("pollComplete"),"open"===this.readyState&&this.v())},r.doClose=function(){var t=this,n=function(){t.write([{type:"close"}])};"open"===this.readyState?n():this.once("open",n)},r.write=function(t){var n=this;this.writable=!1,function(t,n){var i=t.length,r=new Array(i),e=0;t.forEach((function(t,o){g(t,!1,(function(t){r[o]=t,++e===i&&n(r.join(T))}))}))}(t,(function(t){n.doWrite(t,(function(){n.writable=!0,n.emitReserved("drain")}))}))},r.uri=function(){var t=this.opts.secure?"https":"http",n=this.query||{};return!1!==this.opts.timestampRequests&&(n[this.opts.timestampParam]=F()),this.supportsBinary||n.sid||(n.b64=1),this.createUri(t,n)},i(n,[{key:"name",get:function(){return"polling"}}])}(q),H=!1;try{H="undefined"!=typeof XMLHttpRequest&&"withCredentials"in new XMLHttpRequest}catch(t){}var z=H;function J(){}var K=function(t){function n(n){var i;if(i=t.call(this,n)||this,"undefined"!=typeof location){var r="https:"===location.protocol,e=location.port;e||(e=r?"443":"80"),i.xd="undefined"!=typeof location&&n.hostname!==location.hostname||e!==n.port}return i}s(n,t);var i=n.prototype;return i.doWrite=function(t,n){var i=this,r=this.request({method:"POST",data:t});r.on("success",n),r.on("error",(function(t,n){i.onError("xhr post error",t,n)}))},i.doPoll=function(){var t=this,n=this.request();n.on("data",this.onData.bind(this)),n.on("error",(function(n,i){t.onError("xhr poll error",n,i)})),this.pollXhr=n},n}(X),Y=function(t){function n(n,i,r){var e;return(e=t.call(this)||this).createRequest=n,$(e,r),e.l=r,e.p=r.method||"GET",e.m=i,e.k=void 0!==r.data?r.data:null,e.A(),e}s(n,t);var i=n.prototype;return i.A=function(){var t,i=this,r=_(this.l,"agent","pfx","key","passphrase","cert","ca","ciphers","rejectUnauthorized","autoUnref");r.xdomain=!!this.l.xd;var e=this.j=this.createRequest(r);try{e.open(this.p,this.m,!0);try{if(this.l.extraHeaders)for(var o in e.setDisableHeaderCheck&&e.setDisableHeaderCheck(!0),this.l.extraHeaders)this.l.extraHeaders.hasOwnProperty(o)&&e.setRequestHeader(o,this.l.extraHeaders[o])}catch(t){}if("POST"===this.p)try{e.setRequestHeader("Content-type","text/plain;charset=UTF-8")}catch(t){}try{e.setRequestHeader("Accept","*/*")}catch(t){}null===(t=this.l.cookieJar)||void 0===t||t.addCookies(e),"withCredentials"in e&&(e.withCredentials=this.l.withCredentials),this.l.requestTimeout&&(e.timeout=this.l.requestTimeout),e.onreadystatechange=function(){var t;3===e.readyState&&(null===(t=i.l.cookieJar)||void 0===t||t.parseCookies(e.getResponseHeader("set-cookie"))),4===e.readyState&&(200===e.status||1223===e.status?i.O():i.setTimeoutFn((function(){i.B("number"==typeof e.status?e.status:0)}),0))},e.send(this.k)}catch(t){return void this.setTimeoutFn((function(){i.B(t)}),0)}"undefined"!=typeof document&&(this.S=n.requestsCount++,n.requests[this.S]=this)},i.B=function(t){this.emitReserved("error",t,this.j),this.N(!0)},i.N=function(t){if(void 0!==this.j&&null!==this.j){if(this.j.onreadystatechange=J,t)try{this.j.abort()}catch(t){}"undefined"!=typeof document&&delete n.requests[this.S],this.j=null}},i.O=function(){var t=this.j.responseText;null!==t&&(this.emitReserved("data",t),this.emitReserved("success"),this.N())},i.abort=function(){this.N()},n}(I);if(Y.requestsCount=0,Y.requests={},"undefined"!=typeof document)if("function"==typeof attachEvent)attachEvent("onunload",G);else if("function"==typeof addEventListener){addEventListener("onpagehide"in L?"pagehide":"unload",G,!1)}function G(){for(var t in Y.requests)Y.requests.hasOwnProperty(t)&&Y.requests[t].abort()}var Q,W=(Q=tt({xdomain:!1}))&&null!==Q.responseType,Z=function(t){function n(n){var i;i=t.call(this,n)||this;var r=n&&n.forceBase64;return i.supportsBinary=W&&!r,i}return s(n,t),n.prototype.request=function(){var t=arguments.length>0&&void 0!==arguments[0]?arguments[0]:{};return e(t,{xd:this.xd},this.opts),new Y(tt,this.uri(),t)},n}(K);function tt(t){var n=t.xdomain;try{if("undefined"!=typeof XMLHttpRequest&&(!n||z))return new XMLHttpRequest}catch(t){}if(!n)try{return new(L[["Active"].concat("Object").join("X")])("Microsoft.XMLHTTP")}catch(t){}}var nt="undefined"!=typeof navigator&&"string"==typeof navigator.product&&"reactnative"===navigator.product.toLowerCase(),it=function(t){function n(){return t.apply(this,arguments)||this}s(n,t);var r=n.prototype;return r.doOpen=function(){var t=this.uri(),n=this.opts.protocols,i=nt?{}:_(this.opts,"agent","perMessageDeflate","pfx","key","passphrase","cert","ca","ciphers","rejectUnauthorized","localAddress","protocolVersion","origin","maxPayload","family","checkServerIdentity");this.opts.extraHeaders&&(i.headers=this.opts.extraHeaders);try{this.ws=this.createSocket(t,n,i)}catch(t){return this.emitReserved("error",t)}this.ws.binaryType=this.socket.binaryType,this.addEventListeners()},r.addEventListeners=function(){var t=this;this.ws.onopen=function(){t.opts.autoUnref&&t.ws.C.unref(),t.onOpen()},this.ws.onclose=function(n){return t.onClose({description:"websocket connection closed",context:n})},this.ws.onmessage=function(n){return t.onData(n.data)},this.ws.onerror=function(n){return t.onError("websocket error",n)}},r.write=function(t){var n=this;this.writable=!1;for(var i=function(){var i=t[r],e=r===t.length-1;g(i,n.supportsBinary,(function(t){try{n.doWrite(i,t)}catch(t){}e&&R((function(){n.writable=!0,n.emitReserved("drain")}),n.setTimeoutFn)}))},r=0;r<t.length;r++)i()},r.doClose=function(){void 0!==this.ws&&(this.ws.onerror=function(){},this.ws.close(),this.ws=null)},r.uri=function(){var t=this.opts.secure?"wss":"ws",n=this.query||{};return this.opts.timestampRequests&&(n[this.opts.timestampParam]=F()),this.supportsBinary||(n.b64=1),this.createUri(t,n)},i(n,[{key:"name",get:function(){return"websocket"}}])}(q),rt=L.WebSocket||L.MozWebSocket,et=function(t){function n(){return t.apply(this,arguments)||this}s(n,t);var i=n.prototype;return i.createSocket=function(t,n,i){return nt?new rt(t,n,i):n?new rt(t,n):new rt(t)},i.doWrite=function(t,n){this.ws.send(n)},n}(it),ot=function(t){function n(){return t.apply(this,arguments)||this}s(n,t);var r=n.prototype;return r.doOpen=function(){var t=this;try{this.T=new WebTransport(this.createUri("https"),this.opts.transportOptions[this.name])}catch(t){return this.emitReserved("error",t)}this.T.closed.then((function(){t.onClose()})).catch((function(n){t.onError("webtransport error",n)})),this.T.ready.then((function(){t.T.createBidirectionalStream().then((function(n){var i=function(t,n){O||(O=new TextDecoder);var i=[],r=0,e=-1,o=!1;return new TransformStream({transform:function(s,u){for(i.push(s);;){if(0===r){if(M(i)<1)break;var h=x(i,1);o=!(128&~h[0]),e=127&h[0],r=e<126?3:126===e?1:2}else if(1===r){if(M(i)<2)break;var f=x(i,2);e=new DataView(f.buffer,f.byteOffset,f.length).getUint16(0),r=3}else if(2===r){if(M(i)<8)break;var c=x(i,8),a=new DataView(c.buffer,c.byteOffset,c.length),v=a.getUint32(0);if(v>Math.pow(2,21)-1){u.enqueue(d);break}e=v*Math.pow(2,32)+a.getUint32(4),r=3}else{if(M(i)<e)break;var l=x(i,e);u.enqueue(S(o?l:O.decode(l),n)),r=0}if(0===e||e>t){u.enqueue(d);break}}}})}(Number.MAX_SAFE_INTEGER,t.socket.binaryType),r=n.readable.pipeThrough(i).getReader(),e=U();e.readable.pipeTo(n.writable),t.U=e.writable.getWriter();!function n(){r.read().then((function(i){var r=i.done,e=i.value;r||(t.onPacket(e),n())})).catch((function(t){}))}();var o={type:"open"};t.query.sid&&(o.data='{"sid":"'.concat(t.query.sid,'"}')),t.U.write(o).then((function(){return t.onOpen()}))}))}))},r.write=function(t){var n=this;this.writable=!1;for(var i=function(){var i=t[r],e=r===t.length-1;n.U.write(i).then((function(){e&&R((function(){n.writable=!0,n.emitReserved("drain")}),n.setTimeoutFn)}))},r=0;r<t.length;r++)i()},r.doClose=function(){var t;null===(t=this.T)||void 0===t||t.close()},i(n,[{key:"name",get:function(){return"webtransport"}}])}(q),st={websocket:et,webtransport:ot,polling:Z},ut=/^(?:(?![^:@\/?#]+:[^:@\/]*@)(http|https|ws|wss):\/\/)?((?:(([^:@\/?#]*)(?::([^:@\/?#]*))?)?@)?((?:[a-f0-9]{0,4}:){2,7}[a-f0-9]{0,4}|[^:\/?#]*)(?::(\d*))?)(((\/(?:[^?#](?![^?#\/]*\.[^?#\/.]+(?:[?#]|$)))*\/?)?([^?#\/]*))(?:\?([^#]*))?(?:#(.*))?)/,ht=["source","protocol","authority","userInfo","user","password","host","port","relative","path","directory","file","query","anchor"];function ft(t){if(t.length>8e3)throw"URI too long";var n=t,i=t.indexOf("["),r=t.indexOf("]");-1!=i&&-1!=r&&(t=t.substring(0,i)+t.substring(i,r).replace(/:/g,";")+t.substring(r,t.length));for(var e,o,s=ut.exec(t||""),u={},h=14;h--;)u[ht[h]]=s[h]||"";return-1!=i&&-1!=r&&(u.source=n,u.host=u.host.substring(1,u.host.length-1).replace(/;/g,":"),u.authority=u.authority.replace("[","").replace("]","").replace(/;/g,":"),u.ipv6uri=!0),u.pathNames=function(t,n){var i=/\/{2,9}/g,r=n.replace(i,"/").split("/");"/"!=n.slice(0,1)&&0!==n.length||r.splice(0,1);"/"==n.slice(-1)&&r.splice(r.length-1,1);return r}(0,u.path),u.queryKey=(e=u.query,o={},e.replace(/(?:^|&)([^&=]*)=?([^&]*)/g,(function(t,n,i){n&&(o[n]=i)})),o),u}var ct="function"==typeof addEventListener&&"function"==typeof removeEventListener,at=[];ct&&addEventListener("offline",(function(){at.forEach((function(t){return t()}))}),!1);var vt=function(t){function n(n,i){var r;if((r=t.call(this)||this).binaryType="arraybuffer",r.writeBuffer=[],r.M=0,r.I=-1,r.R=-1,r.L=-1,r._=1/0,n&&"object"===c(n)&&(i=n,n=null),n){var o=ft(n);i.hostname=o.host,i.secure="https"===o.protocol||"wss"===o.protocol,i.port=o.port,o.query&&(i.query=o.query)}else i.host&&(i.hostname=ft(i.host).host);return $(r,i),r.secure=null!=i.secure?i.secure:"undefined"!=typeof location&&"https:"===location.protocol,i.hostname&&!i.port&&(i.port=r.secure?"443":"80"),r.hostname=i.hostname||("undefined"!=typeof location?location.hostname:"localhost"),r.port=i.port||("undefined"!=typeof location&&location.port?location.port:r.secure?"443":"80"),r.transports=[],r.D={},i.transports.forEach((function(t){var n=t.prototype.name;r.transports.push(n),r.D[n]=t})),r.opts=e({path:"/engine.io",agent:!1,withCredentials:!1,upgrade:!0,timestampParam:"t",rememberUpgrade:!1,addTrailingSlash:!0,rejectUnauthorized:!0,perMessageDeflate:{threshold:1024},transportOptions:{},closeOnBeforeunload:!1},i),r.opts.path=r.opts.path.replace(/\/$/,"")+(r.opts.addTrailingSlash?"/":""),"string"==typeof r.opts.query&&(r.opts.query=function(t){for(var n={},i=t.split("&"),r=0,e=i.length;r<e;r++){var o=i[r].split("=");n[decodeURIComponent(o[0])]=decodeURIComponent(o[1])}return n}(r.opts.query)),ct&&(r.opts.closeOnBeforeunload&&(r.P=function(){r.transport&&(r.transport.removeAllListeners(),r.transport.close())},addEventListener("beforeunload",r.P,!1)),"localhost"!==r.hostname&&(r.$=function(){r.F("transport close",{description:"network connection lost"})},at.push(r.$))),r.opts.withCredentials&&(r.V=void 0),r.q(),r}s(n,t);var i=n.prototype;return i.createTransport=function(t){var n=e({},this.opts.query);n.EIO=4,n.transport=t,this.id&&(n.sid=this.id);var i=e({},this.opts,{query:n,socket:this,hostname:this.hostname,secure:this.secure,port:this.port},this.opts.transportOptions[t]);return new this.D[t](i)},i.q=function(){var t=this;if(0!==this.transports.length){var i=this.opts.rememberUpgrade&&n.priorWebsocketSuccess&&-1!==this.transports.indexOf("websocket")?"websocket":this.transports[0];this.readyState="opening";var r=this.createTransport(i);r.open(),this.setTransport(r)}else this.setTimeoutFn((function(){t.emitReserved("error","No transports available")}),0)},i.setTransport=function(t){var n=this;this.transport&&this.transport.removeAllListeners(),this.transport=t,t.on("drain",this.X.bind(this)).on("packet",this.H.bind(this)).on("error",this.B.bind(this)).on("close",(function(t){return n.F("transport close",t)}))},i.onOpen=function(){this.readyState="open",n.priorWebsocketSuccess="websocket"===this.transport.name,this.emitReserved("open"),this.flush()},i.H=function(t){if("opening"===this.readyState||"open"===this.readyState||"closing"===this.readyState)switch(this.emitReserved("packet",t),this.emitReserved("heartbeat"),t.type){case"open":this.onHandshake(JSON.parse(t.data));break;case"ping":this.J("pong"),this.emitReserved("ping"),this.emitReserved("pong"),this.K();break;case"error":var n=new Error("server error");n.code=t.data,this.B(n);break;case"message":this.emitReserved("data",t.data),this.emitReserved("message",t.data)}},i.onHandshake=function(t){this.emitReserved("handshake",t),this.id=t.sid,this.transport.query.sid=t.sid,this.I=t.pingInterval,this.R=t.pingTimeout,this.L=t.maxPayload,this.onOpen(),"closed"!==this.readyState&&this.K()},i.K=function(){var t=this;this.clearTimeoutFn(this.Y);var n=this.I+this.R;this._=Date.now()+n,this.Y=this.setTimeoutFn((function(){t.F("ping timeout")}),n),this.opts.autoUnref&&this.Y.unref()},i.X=function(){this.writeBuffer.splice(0,this.M),this.M=0,0===this.writeBuffer.length?this.emitReserved("drain"):this.flush()},i.flush=function(){if("closed"!==this.readyState&&this.transport.writable&&!this.upgrading&&this.writeBuffer.length){var t=this.G();this.transport.send(t),this.M=t.length,this.emitReserved("flush")}},i.G=function(){if(!(this.L&&"polling"===this.transport.name&&this.writeBuffer.length>1))return this.writeBuffer;for(var t,n=1,i=0;i<this.writeBuffer.length;i++){var r=this.writeBuffer[i].data;if(r&&(n+="string"==typeof(t=r)?function(t){for(var n=0,i=0,r=0,e=t.length;r<e;r++)(n=t.charCodeAt(r))<128?i+=1:n<2048?i+=2:n<55296||n>=57344?i+=3:(r++,i+=4);return i}(t):Math.ceil(1.33*(t.byteLength||t.size))),i>0&&n>this.L)return this.writeBuffer.slice(0,i);n+=2}return this.writeBuffer},i.W=function(){var t=this;if(!this._)return!0;var n=Date.now()>this._;return n&&(this._=0,R((function(){t.F("ping timeout")}),this.setTimeoutFn)),n},i.write=function(t,n,i){return this.J("message",t,n,i),this},i.send=function(t,n,i){return this.J("message",t,n,i),this},i.J=function(t,n,i,r){if("function"==typeof n&&(r=n,n=void 0),"function"==typeof i&&(r=i,i=null),"closing"!==this.readyState&&"closed"!==this.readyState){(i=i||{}).compress=!1!==i.compress;var e={type:t,data:n,options:i};this.emitReserved("packetCreate",e),this.writeBuffer.push(e),r&&this.once("flush",r),this.flush()}},i.close=function(){var t=this,n=function(){t.F("forced close"),t.transport.close()},i=function i(){t.off("upgrade",i),t.off("upgradeError",i),n()},r=function(){t.once("upgrade",i),t.once("upgradeError",i)};return"opening"!==this.readyState&&"open"!==this.readyState||(this.readyState="closing",this.writeBuffer.length?this.once("drain",(function(){t.upgrading?r():n()})):this.upgrading?r():n()),this},i.B=function(t){if(n.priorWebsocketSuccess=!1,this.opts.tryAllTransports&&this.transports.length>1&&"opening"===this.readyState)return this.transports.shift(),this.q();this.emitReserved("error",t),this.F("transport error",t)},i.F=function(t,n){if("opening"===this.readyState||"open"===this.readyState||"closing"===this.readyState){if(this.clearTimeoutFn(this.Y),this.transport.removeAllListeners("close"),this.transport.close(),this.transport.removeAllListeners(),ct&&(this.P&&removeEventListener("beforeunload",this.P,!1),this.$)){var i=at.indexOf(this.$);-1!==i&&at.splice(i,1)}this.readyState="closed",this.id=null,this.emitReserved("close",t,n),this.writeBuffer=[],this.M=0}},n}(I);vt.protocol=4;var lt=function(t){function n(){var n;return(n=t.apply(this,arguments)||this).Z=[],n}s(n,t);var i=n.prototype;return i.onOpen=function(){if(t.prototype.onOpen.call(this),"open"===this.readyState&&this.opts.upgrade)for(var n=0;n<this.Z.length;n++)this.tt(this.Z[n])},i.tt=function(t){var n=this,i=this.createTransport(t),r=!1;vt.priorWebsocketSuccess=!1;var e=function(){r||(i.send([{type:"ping",data:"probe"}]),i.once("packet",(function(t){if(!r)if("pong"===t.type&&"probe"===t.data){if(n.upgrading=!0,n.emitReserved("upgrading",i),!i)return;vt.priorWebsocketSuccess="websocket"===i.name,n.transport.pause((function(){r||"closed"!==n.readyState&&(c(),n.setTransport(i),i.send([{type:"upgrade"}]),n.emitReserved("upgrade",i),i=null,n.upgrading=!1,n.flush())}))}else{var e=new Error("probe error");e.transport=i.name,n.emitReserved("upgradeError",e)}})))};function o(){r||(r=!0,c(),i.close(),i=null)}var s=function(t){var r=new Error("probe error: "+t);r.transport=i.name,o(),n.emitReserved("upgradeError",r)};function u(){s("transport closed")}function h(){s("socket closed")}function f(t){i&&t.name!==i.name&&o()}var c=function(){i.removeListener("open",e),i.removeListener("error",s),i.removeListener("close",u),n.off("close",h),n.off("upgrading",f)};i.once("open",e),i.once("error",s),i.once("close",u),this.once("close",h),this.once("upgrading",f),-1!==this.Z.indexOf("webtransport")&&"webtransport"!==t?this.setTimeoutFn((function(){r||i.open()}),200):i.open()},i.onHandshake=function(n){this.Z=this.nt(n.upgrades),t.prototype.onHandshake.call(this,n)},i.nt=function(t){for(var n=[],i=0;i<t.length;i++)~this.transports.indexOf(t[i])&&n.push(t[i]);return n},n}(vt),pt=function(t){function n(n){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:{},r="object"===c(n)?n:i;return(!r.transports||r.transports&&"string"==typeof r.transports[0])&&(r.transports=(r.transports||["polling","websocket","webtransport"]).map((function(t){return st[t]})).filter((function(t){return!!t}))),t.call(this,n,r)||this}return s(n,t),n}(lt);pt.protocol;var dt="function"==typeof ArrayBuffer,yt=function(t){return"function"==typeof ArrayBuffer.isView?ArrayBuffer.isView(t):t.buffer instanceof ArrayBuffer},bt=Object.prototype.toString,wt="function"==typeof Blob||"undefined"!=typeof Blob&&"[object BlobConstructor]"===bt.call(Blob),gt="function"==typeof File||"undefined"!=typeof File&&"[object FileConstructor]"===bt.call(File);function mt(t){return dt&&(t instanceof ArrayBuffer||yt(t))||wt&&t instanceof Blob||gt&&t instanceof File}function kt(t,n){if(!t||"object"!==c(t))return!1;if(Array.isArray(t)){for(var i=0,r=t.length;i<r;i++)if(kt(t[i]))return!0;return!1}if(mt(t))return!0;if(t.toJSON&&"function"==typeof t.toJSON&&1===arguments.length)return kt(t.toJSON(),!0);for(var e in t)if(Object.prototype.hasOwnProperty.call(t,e)&&kt(t[e]))return!0;return!1}function At(t){var n=[],i=t.data,r=t;return r.data=jt(i,n),r.attachments=n.length,{packet:r,buffers:n}}function jt(t,n){if(!t)return t;if(mt(t)){var i={_placeholder:!0,num:n.length};return n.push(t),i}if(Array.isArray(t)){for(var r=new Array(t.length),e=0;e<t.length;e++)r[e]=jt(t[e],n);return r}if("object"===c(t)&&!(t instanceof Date)){var o={};for(var s in t)Object.prototype.hasOwnProperty.call(t,s)&&(o[s]=jt(t[s],n));return o}return t}function Et(t,n){return t.data=Ot(t.data,n),delete t.attachments,t}function Ot(t,n){if(!t)return t;if(t&&!0===t._placeholder){if("number"==typeof t.num&&t.num>=0&&t.num<n.length)return n[t.num];throw new Error("illegal attachments")}if(Array.isArray(t))for(var i=0;i<t.length;i++)t[i]=Ot(t[i],n);else if("object"===c(t))for(var r in t)Object.prototype.hasOwnProperty.call(t,r)&&(t[r]=Ot(t[r],n));return t}var Bt,St=["connect","connect_error","disconnect","disconnecting","newListener","removeListener"];!function(t){t[t.CONNECT=0]="CONNECT",t[t.DISCONNECT=1]="DISCONNECT",t[t.EVENT=2]="EVENT",t[t.ACK=3]="ACK",t[t.CONNECT_ERROR=4]="CONNECT_ERROR",t[t.BINARY_EVENT=5]="BINARY_EVENT",t[t.BINARY_ACK=6]="BINARY_ACK"}(Bt||(Bt={}));var Nt=function(){function t(t){this.replacer=t}var n=t.prototype;return n.encode=function(t){return t.type!==Bt.EVENT&&t.type!==Bt.ACK||!kt(t)?[this.encodeAsString(t)]:this.encodeAsBinary({type:t.type===Bt.EVENT?Bt.BINARY_EVENT:Bt.BINARY_ACK,nsp:t.nsp,data:t.data,id:t.id})},n.encodeAsString=function(t){var n=""+t.type;return t.type!==Bt.BINARY_EVENT&&t.type!==Bt.BINARY_ACK||(n+=t.attachments+"-"),t.nsp&&"/"!==t.nsp&&(n+=t.nsp+","),null!=t.id&&(n+=t.id),null!=t.data&&(n+=JSON.stringify(t.data,this.replacer)),n},n.encodeAsBinary=function(t){var n=At(t),i=this.encodeAsString(n.packet),r=n.buffers;return r.unshift(i),r},t}(),Ct=function(t){function n(n){var i;return(i=t.call(this)||this).reviver=n,i}s(n,t);var i=n.prototype;return i.add=function(n){var i;if("string"==typeof n){if(this.reconstructor)throw new Error("got plaintext data when reconstructing a packet");var r=(i=this.decodeString(n)).type===Bt.BINARY_EVENT;r||i.type===Bt.BINARY_ACK?(i.type=r?Bt.EVENT:Bt.ACK,this.reconstructor=new Tt(i),0===i.attachments&&t.prototype.emitReserved.call(this,"decoded",i)):t.prototype.emitReserved.call(this,"decoded",i)}else{if(!mt(n)&&!n.base64)throw new Error("Unknown type: "+n);if(!this.reconstructor)throw new Error("got binary data when not reconstructing a packet");(i=this.reconstructor.takeBinaryData(n))&&(this.reconstructor=null,t.prototype.emitReserved.call(this,"decoded",i))}},i.decodeString=function(t){var i=0,r={type:Number(t.charAt(0))};if(void 0===Bt[r.type])throw new Error("unknown packet type "+r.type);if(r.type===Bt.BINARY_EVENT||r.type===Bt.BINARY_ACK){for(var e=i+1;"-"!==t.charAt(++i)&&i!=t.length;);var o=t.substring(e,i);if(o!=Number(o)||"-"!==t.charAt(i))throw new Error("Illegal attachments");r.attachments=Number(o)}if("/"===t.charAt(i+1)){for(var s=i+1;++i;){if(","===t.charAt(i))break;if(i===t.length)break}r.nsp=t.substring(s,i)}else r.nsp="/";var u=t.charAt(i+1);if(""!==u&&Number(u)==u){for(var h=i+1;++i;){var f=t.charAt(i);if(null==f||Number(f)!=f){--i;break}if(i===t.length)break}r.id=Number(t.substring(h,i+1))}if(t.charAt(++i)){var c=this.tryParse(t.substr(i));if(!n.isPayloadValid(r.type,c))throw new Error("invalid payload");r.data=c}return r},i.tryParse=function(t){try{return JSON.parse(t,this.reviver)}catch(t){return!1}},n.isPayloadValid=function(t,n){switch(t){case Bt.CONNECT:return Mt(n);case Bt.DISCONNECT:return void 0===n;case Bt.CONNECT_ERROR:return"string"==typeof n||Mt(n);case Bt.EVENT:case Bt.BINARY_EVENT:return Array.isArray(n)&&("number"==typeof n[0]||"string"==typeof n[0]&&-1===St.indexOf(n[0]));case Bt.ACK:case Bt.BINARY_ACK:return Array.isArray(n)}},i.destroy=function(){this.reconstructor&&(this.reconstructor.finishedReconstruction(),this.reconstructor=null)},n}(I),Tt=function(){function t(t){this.packet=t,this.buffers=[],this.reconPack=t}var n=t.prototype;return n.takeBinaryData=function(t){if(this.buffers.push(t),this.buffers.length===this.reconPack.attachments){var n=Et(this.reconPack,this.buffers);return this.finishedReconstruction(),n}return null},n.finishedReconstruction=function(){this.reconPack=null,this.buffers=[]},t}();var Ut=Number.isInteger||function(t){return"number"==typeof t&&isFinite(t)&&Math.floor(t)===t};function Mt(t){return"[object Object]"===Object.prototype.toString.call(t)}var xt=Object.freeze({__proto__:null,protocol:5,get PacketType(){return Bt},Encoder:Nt,Decoder:Ct,isPacketValid:function(t){return"string"==typeof t.nsp&&(void 0===(n=t.id)||Ut(n))&&function(t,n){switch(t){case Bt.CONNECT:return void 0===n||Mt(n);case Bt.DISCONNECT:return void 0===n;case Bt.EVENT:return Array.isArray(n)&&("number"==typeof n[0]||"string"==typeof n[0]&&-1===St.indexOf(n[0]));case Bt.ACK:return Array.isArray(n);case Bt.CONNECT_ERROR:return"string"==typeof n||Mt(n);default:return!1}}(t.type,t.data);var n}});function It(t,n,i){return t.on(n,i),function(){t.off(n,i)}}var Rt=Object.freeze({connect:1,connect_error:1,disconnect:1,disconnecting:1,newListener:1,removeListener:1}),Lt=function(t){function n(n,i,r){var o;return(o=t.call(this)||this).connected=!1,o.recovered=!1,o.receiveBuffer=[],o.sendBuffer=[],o.it=[],o.rt=0,o.ids=0,o.acks={},o.flags={},o.io=n,o.nsp=i,r&&r.auth&&(o.auth=r.auth),o.l=e({},r),o.io.et&&o.open(),o}s(n,t);var o=n.prototype;return o.subEvents=function(){if(!this.subs){var t=this.io;this.subs=[It(t,"open",this.onopen.bind(this)),It(t,"packet",this.onpacket.bind(this)),It(t,"error",this.onerror.bind(this)),It(t,"close",this.onclose.bind(this))]}},o.connect=function(){return this.connected||(this.subEvents(),this.io.ot||this.io.open(),"open"===this.io.st&&this.onopen()),this},o.open=function(){return this.connect()},o.send=function(){for(var t=arguments.length,n=new Array(t),i=0;i<t;i++)n[i]=arguments[i];return n.unshift("message"),this.emit.apply(this,n),this},o.emit=function(t){var n,i,r;if(Rt.hasOwnProperty(t))throw new Error('"'+t.toString()+'" is a reserved event name');for(var e=arguments.length,o=new Array(e>1?e-1:0),s=1;s<e;s++)o[s-1]=arguments[s];if(o.unshift(t),this.l.retries&&!this.flags.fromQueue&&!this.flags.volatile)return this.ut(o),this;var u={type:Bt.EVENT,data:o,options:{}};if(u.options.compress=!1!==this.flags.compress,"function"==typeof o[o.length-1]){var h=this.ids++,f=o.pop();this.ht(h,f),u.id=h}var c=null===(i=null===(n=this.io.engine)||void 0===n?void 0:n.transport)||void 0===i?void 0:i.writable,a=this.connected&&!(null===(r=this.io.engine)||void 0===r?void 0:r.W());return this.flags.volatile&&!c||(a?(this.notifyOutgoingListeners(u),this.packet(u)):this.sendBuffer.push(u)),this.flags={},this},o.ht=function(t,n){var i,r=this,e=null!==(i=this.flags.timeout)&&void 0!==i?i:this.l.ackTimeout;if(void 0!==e){var o=this.io.setTimeoutFn((function(){delete r.acks[t];for(var i=0;i<r.sendBuffer.length;i++)r.sendBuffer[i].id===t&&r.sendBuffer.splice(i,1);n.call(r,new Error("operation has timed out"))}),e),s=function(){r.io.clearTimeoutFn(o);for(var t=arguments.length,i=new Array(t),e=0;e<t;e++)i[e]=arguments[e];n.apply(r,i)};s.withError=!0,this.acks[t]=s}else this.acks[t]=n},o.emitWithAck=function(t){for(var n=this,i=arguments.length,r=new Array(i>1?i-1:0),e=1;e<i;e++)r[e-1]=arguments[e];return new Promise((function(i,e){var o=function(t,n){return t?e(t):i(n)};o.withError=!0,r.push(o),n.emit.apply(n,[t].concat(r))}))},o.ut=function(t){var n,i=this;"function"==typeof t[t.length-1]&&(n=t.pop());var r={id:this.rt++,tryCount:0,pending:!1,args:t,flags:e({fromQueue:!0},this.flags)};t.push((function(t){if(i.it[0],null!==t)r.tryCount>i.l.retries&&(i.it.shift(),n&&n(t));else if(i.it.shift(),n){for(var e=arguments.length,o=new Array(e>1?e-1:0),s=1;s<e;s++)o[s-1]=arguments[s];n.apply(void 0,[null].concat(o))}return r.pending=!1,i.ft()})),this.it.push(r),this.ft()},o.ft=function(){var t=arguments.length>0&&void 0!==arguments[0]&&arguments[0];if(this.connected&&0!==this.it.length){var n=this.it[0];n.pending&&!t||(n.pending=!0,n.tryCount++,this.flags=n.flags,this.emit.apply(this,n.args))}},o.packet=function(t){t.nsp=this.nsp,this.io.ct(t)},o.onopen=function(){var t=this;"function"==typeof this.auth?this.auth((function(n){t.vt(n)})):this.vt(this.auth)},o.vt=function(t){this.packet({type:Bt.CONNECT,data:this.lt?e({pid:this.lt,offset:this.dt},t):t})},o.onerror=function(t){this.connected||this.emitReserved("connect_error",t)},o.onclose=function(t,n){this.connected=!1,delete this.id,this.emitReserved("disconnect",t,n),this.yt()},o.yt=function(){var t=this;Object.keys(this.acks).forEach((function(n){if(!t.sendBuffer.some((function(t){return String(t.id)===n}))){var i=t.acks[n];delete t.acks[n],i.withError&&i.call(t,new Error("socket has been disconnected"))}}))},o.onpacket=function(t){if(t.nsp===this.nsp)switch(t.type){case Bt.CONNECT:t.data&&t.data.sid?this.onconnect(t.data.sid,t.data.pid):this.emitReserved("connect_error",new Error("It seems you are trying to reach a Socket.IO server in v2.x with a v3.x client, but they are not compatible (more information here: https://socket.io/docs/v3/migrating-from-2-x-to-3-0/)"));break;case Bt.EVENT:case Bt.BINARY_EVENT:this.onevent(t);break;case Bt.ACK:case Bt.BINARY_ACK:this.onack(t);break;case Bt.DISCONNECT:this.ondisconnect();break;case Bt.CONNECT_ERROR:this.destroy();var n=new Error(t.data.message);n.data=t.data.data,this.emitReserved("connect_error",n)}},o.onevent=function(t){var n=t.data||[];null!=t.id&&n.push(this.ack(t.id)),this.connected?this.emitEvent(n):this.receiveBuffer.push(Object.freeze(n))},o.emitEvent=function(n){if(this.bt&&this.bt.length){var i,e=r(this.bt.slice());try{for(e.s();!(i=e.n()).done;){i.value.apply(this,n)}}catch(t){e.e(t)}finally{e.f()}}t.prototype.emit.apply(this,n),this.lt&&n.length&&"string"==typeof n[n.length-1]&&(this.dt=n[n.length-1])},o.ack=function(t){var n=this,i=!1;return function(){if(!i){i=!0;for(var r=arguments.length,e=new Array(r),o=0;o<r;o++)e[o]=arguments[o];n.packet({type:Bt.ACK,id:t,data:e})}}},o.onack=function(t){var n=this.acks[t.id];"function"==typeof n&&(delete this.acks[t.id],n.withError&&t.data.unshift(null),n.apply(this,t.data))},o.onconnect=function(t,n){this.id=t,this.recovered=n&&this.lt===n,this.lt=n,this.connected=!0,this.emitBuffered(),this.ft(!0),this.emitReserved("connect")},o.emitBuffered=function(){var t=this;this.receiveBuffer.forEach((function(n){return t.emitEvent(n)})),this.receiveBuffer=[],this.sendBuffer.forEach((function(n){t.notifyOutgoingListeners(n),t.packet(n)})),this.sendBuffer=[]},o.ondisconnect=function(){this.destroy(),this.onclose("io server disconnect")},o.destroy=function(){this.subs&&(this.subs.forEach((function(t){return t()})),this.subs=void 0),this.io.wt(this)},o.disconnect=function(){return this.connected&&this.packet({type:Bt.DISCONNECT}),this.destroy(),this.connected&&this.onclose("io client disconnect"),this},o.close=function(){return this.disconnect()},o.compress=function(t){return this.flags.compress=t,this},o.timeout=function(t){return this.flags.timeout=t,this},o.onAny=function(t){return this.bt=this.bt||[],this.bt.push(t),this},o.prependAny=function(t){return this.bt=this.bt||[],this.bt.unshift(t),this},o.offAny=function(t){if(!this.bt)return this;if(t){for(var n=this.bt,i=0;i<n.length;i++)if(t===n[i])return n.splice(i,1),this}else this.bt=[];return this},o.listenersAny=function(){return this.bt||[]},o.onAnyOutgoing=function(t){return this.gt=this.gt||[],this.gt.push(t),this},o.prependAnyOutgoing=function(t){return this.gt=this.gt||[],this.gt.unshift(t),this},o.offAnyOutgoing=function(t){if(!this.gt)return this;if(t){for(var n=this.gt,i=0;i<n.length;i++)if(t===n[i])return n.splice(i,1),this}else this.gt=[];return this},o.listenersAnyOutgoing=function(){return this.gt||[]},o.notifyOutgoingListeners=function(t){if(this.gt&&this.gt.length){var n,i=r(this.gt.slice());try{for(i.s();!(n=i.n()).done;){n.value.apply(this,t.data)}}catch(t){i.e(t)}finally{i.f()}}},i(n,[{key:"disconnected",get:function(){return!this.connected}},{key:"active",get:function(){return!!this.subs}},{key:"volatile",get:function(){return this.flags.volatile=!0,this}}])}(I);function _t(t){t=t||{},this.ms=t.min||100,this.max=t.max||1e4,this.factor=t.factor||2,this.jitter=t.jitter>0&&t.jitter<=1?t.jitter:0,this.attempts=0}_t.prototype.duration=function(){var t=this.ms*Math.pow(this.factor,this.attempts++);if(this.jitter){var n=Math.random(),i=Math.floor(n*this.jitter*t);t=1&Math.floor(10*n)?t+i:t-i}return 0|Math.min(t,this.max)},_t.prototype.reset=function(){this.attempts=0},_t.prototype.setMin=function(t){this.ms=t},_t.prototype.setMax=function(t){this.max=t},_t.prototype.setJitter=function(t){this.jitter=t};var Dt=function(t){function n(n,i){var r,e;(r=t.call(this)||this).nsps={},r.subs=[],n&&"object"===c(n)&&(i=n,n=void 0),(i=i||{}).path=i.path||"/socket.io",r.opts=i,$(r,i),r.reconnection(!1!==i.reconnection),r.reconnectionAttempts(i.reconnectionAttempts||1/0),r.reconnectionDelay(i.reconnectionDelay||1e3),r.reconnectionDelayMax(i.reconnectionDelayMax||5e3),r.randomizationFactor(null!==(e=i.randomizationFactor)&&void 0!==e?e:.5),r.backoff=new _t({min:r.reconnectionDelay(),max:r.reconnectionDelayMax(),jitter:r.randomizationFactor()}),r.timeout(null==i.timeout?2e4:i.timeout),r.st="closed",r.uri=n;var o=i.parser||xt;return r.encoder=new o.Encoder,r.decoder=new o.Decoder,r.et=!1!==i.autoConnect,r.et&&r.open(),r}s(n,t);var i=n.prototype;return i.reconnection=function(t){return arguments.length?(this.kt=!!t,t||(this.skipReconnect=!0),this):this.kt},i.reconnectionAttempts=function(t){return void 0===t?this.At:(this.At=t,this)},i.reconnectionDelay=function(t){var n;return void 0===t?this.jt:(this.jt=t,null===(n=this.backoff)||void 0===n||n.setMin(t),this)},i.randomizationFactor=function(t){var n;return void 0===t?this.Et:(this.Et=t,null===(n=this.backoff)||void 0===n||n.setJitter(t),this)},i.reconnectionDelayMax=function(t){var n;return void 0===t?this.Ot:(this.Ot=t,null===(n=this.backoff)||void 0===n||n.setMax(t),this)},i.timeout=function(t){return arguments.length?(this.Bt=t,this):this.Bt},i.maybeReconnectOnOpen=function(){!this.ot&&this.kt&&0===this.backoff.attempts&&this.reconnect()},i.open=function(t){var n=this;if(~this.st.indexOf("open"))return this;this.engine=new pt(this.uri,this.opts);var i=this.engine,r=this;this.st="opening",this.skipReconnect=!1;var e=It(i,"open",(function(){r.onopen(),t&&t()})),o=function(i){n.cleanup(),n.st="closed",n.emitReserved("error",i),t?t(i):n.maybeReconnectOnOpen()},s=It(i,"error",o);if(!1!==this.Bt){var u=this.Bt,h=this.setTimeoutFn((function(){e(),o(new Error("timeout")),i.close()}),u);this.opts.autoUnref&&h.unref(),this.subs.push((function(){n.clearTimeoutFn(h)}))}return this.subs.push(e),this.subs.push(s),this},i.connect=function(t){return this.open(t)},i.onopen=function(){this.cleanup(),this.st="open",this.emitReserved("open");var t=this.engine;this.subs.push(It(t,"ping",this.onping.bind(this)),It(t,"data",this.ondata.bind(this)),It(t,"error",this.onerror.bind(this)),It(t,"close",this.onclose.bind(this)),It(this.decoder,"decoded",this.ondecoded.bind(this)))},i.onping=function(){this.emitReserved("ping")},i.ondata=function(t){try{this.decoder.add(t)}catch(t){this.onclose("parse error",t)}},i.ondecoded=function(t){var n=this;R((function(){n.emitReserved("packet",t)}),this.setTimeoutFn)},i.onerror=function(t){this.emitReserved("error",t)},i.socket=function(t,n){var i=this.nsps[t];return i?this.et&&!i.active&&i.connect():(i=new Lt(this,t,n),this.nsps[t]=i),i},i.wt=function(t){for(var n=0,i=Object.keys(this.nsps);n<i.length;n++){var r=i[n];if(this.nsps[r].active)return}this.St()},i.ct=function(t){for(var n=this.encoder.encode(t),i=0;i<n.length;i++)this.engine.write(n[i],t.options)},i.cleanup=function(){this.subs.forEach((function(t){return t()})),this.subs.length=0,this.decoder.destroy()},i.St=function(){this.skipReconnect=!0,this.ot=!1,this.onclose("forced close")},i.disconnect=function(){return this.St()},i.onclose=function(t,n){var i;this.cleanup(),null===(i=this.engine)||void 0===i||i.close(),this.backoff.reset(),this.st="closed",this.emitReserved("close",t,n),this.kt&&!this.skipReconnect&&this.reconnect()},i.reconnect=function(){var t=this;if(this.ot||this.skipReconnect)return this;var n=this;if(this.backoff.attempts>=this.At)this.backoff.reset(),this.emitReserved("reconnect_failed"),this.ot=!1;else{var i=this.backoff.duration();this.ot=!0;var r=this.setTimeoutFn((function(){n.skipReconnect||(t.emitReserved("reconnect_attempt",n.backoff.attempts),n.skipReconnect||n.open((function(i){i?(n.ot=!1,n.reconnect(),t.emitReserved("reconnect_error",i)):n.onreconnect()})))}),i);this.opts.autoUnref&&r.unref(),this.subs.push((function(){t.clearTimeoutFn(r)}))}},i.onreconnect=function(){var t=this.backoff.attempts;this.ot=!1,this.backoff.reset(),this.emitReserved("reconnect",t)},n}(I),Pt={};function $t(t,n){"object"===c(t)&&(n=t,t=void 0);var i,r=function(t){var n=arguments.length>1&&void 0!==arguments[1]?arguments[1]:"",i=arguments.length>2?arguments[2]:void 0,r=t;i=i||"undefined"!=typeof location&&location,null==t&&(t=i.protocol+"//"+i.host),"string"==typeof t&&("/"===t.charAt(0)&&(t="/"===t.charAt(1)?i.protocol+t:i.host+t),/^(https?|wss?):\/\//.test(t)||(t=void 0!==i?i.protocol+"//"+t:"https://"+t),r=ft(t)),r.port||(/^(http|ws)$/.test(r.protocol)?r.port="80":/^(http|ws)s$/.test(r.protocol)&&(r.port="443")),r.path=r.path||"/";var e=-1!==r.host.indexOf(":")?"["+r.host+"]":r.host;return r.id=r.protocol+"://"+e+":"+r.port+n,r.href=r.protocol+"://"+e+(i&&i.port===r.port?"":":"+r.port),r}(t,(n=n||{}).path||"/socket.io"),e=r.source,o=r.id,s=r.path,u=Pt[o]&&s in Pt[o].nsps;return n.forceNew||n["force new connection"]||!1===n.multiplex||u?i=new Dt(e,n):(Pt[o]||(Pt[o]=new Dt(e,n)),i=Pt[o]),r.query&&!n.query&&(n.query=r.queryKey),i.socket(r.path,n)}return e($t,{Manager:Dt,Socket:Lt,io:$t,connect:$t}),$t}));
+
+
+        })();
+        const lib = globalThis.io;
+        if (had) globalThis.io = prev; else delete globalThis.io;
+        return lib;
+    })();
+
+    // ---- userscript/common.js ----
+/**
+ * 固定版ユーザースクリプトの共通部品（hub.js と shim.js の両方から使う）。
+ *
+ * ■ 安全の決まり（このスクリプトの存在理由）
+ * 同期サーバー（Fly.io）を乗っ取られても、友達の画面に偽の画面や悪いプログラムを出せないようにする。
+ * そのため、サーバーから届くものは**すべて「ただのデータ」として扱う**:
+ *
+ *   - 文字（名前・チャット）は textContent でしか画面に入れない（HTML として解釈させない）
+ *   - 作品 ID はサービスごとの形を検査し、合わないものは捨てる
+ *   - 開くアドレスは、このファイルに書いた Netflix / Amazon / YouTube の決まった形でしか作らない
+ *     （サーバーが送ってくる url は使わない）
+ *   - 時刻は数として検査する
+ *
+ * サーバーを乗っ取られても出来るのは、再生を勝手に動かす・変なチャットを流す、の嫌がらせまで。
+ * スクリプトの中身は友達の iPhone に入っている固定のファイルで、サーバーからは変えられない
+ * （@require / @updateURL を使わないのはこのため）。
+ */
+const WP_US = (() => {
+    const SERVER = __WP_SERVER__;
+    const ROOM_RE = /^[A-Z0-9]{4,12}$/;
+
+    const ID_RE = {
+        netflix: /^\d{4,12}$/,
+        // 拡張機能（adapters/prime.js）が拾う形: ASIN・長い英数字の ID・GTI（英数字と . だけ。.. は不可）
+        prime: /^(?!.*\.\.)(?:[A-Za-z0-9.]{10,80}|amzn1\.dv\.gti\.[0-9a-f-]{36})$/,
+        youtube: /^[A-Za-z0-9_-]{11}$/
+    };
+    const GTI_RE = /^amzn1\.dv\.gti\.[0-9a-f-]{36}$/;
+    const MAX_SEC = 24 * 3600;
+
+    /** サーバーから届いた作品情報を検査して、使える形だけ返す。駄目なら null */
+    function cleanVideo(v) {
+        if (!v || typeof v !== 'object') return null;
+        const service = v.service;
+        if (!Object.prototype.hasOwnProperty.call(ID_RE, service)) return null;
+        const contentId = typeof v.contentId === 'string' && ID_RE[service].test(v.contentId) ? v.contentId : null;
+        if (!contentId) return null;
+        const appId = typeof v.appId === 'string' && GTI_RE.test(v.appId) ? v.appId : null;
+        return { service, contentId, appId };
+    }
+
+    /** 秒として使える数か。駄目なら null */
+    function cleanSec(n) {
+        return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= MAX_SEC ? n : null;
+    }
+
+    function cleanRoom(r) {
+        const s = String(r || '').toUpperCase();
+        return ROOM_RE.test(s) ? s : null;
+    }
+
+    function hhmmss(sec) {
+        if (!Number.isFinite(sec) || sec < 0) return '--:--';
+        const s = Math.floor(sec % 60);
+        const m = Math.floor(sec / 60) % 60;
+        const h = Math.floor(sec / 3600);
+        const pad = (n) => String(n).padStart(2, '0');
+        return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+    }
+
+    const enc = encodeURIComponent;
+
+    /*
+     * 開くアドレスは、ここに書いた形でしか作らない。
+     * v は cleanVideo() を通したもの、t は整数の秒。
+     */
+    const urls = {
+        /** アプリがその時刻から開く形（Netflix / YouTube は実機で確認済み） */
+        app(v, t) {
+            const sec = Math.max(0, Math.min(MAX_SEC, Math.round(t) || 0));
+            if (v.service === 'netflix') return `https://www.netflix.com/watch/${enc(v.contentId)}?t=${sec}`;
+            if (v.service === 'youtube') return `https://www.youtube.com/watch?v=${enc(v.contentId)}&t=${sec}s`;
+            if (v.service === 'prime') {
+                // 日本版アプリは app.primevideo.com でないと開かない。時刻は無視される（実機で確認）
+                return v.appId
+                    ? `https://app.primevideo.com/detail?gti=${enc(v.appId)}&autoplay=1&t=${sec}`
+                    : `https://app.primevideo.com/detail?asin=${enc(v.contentId)}&autoplay=1&t=${sec}`;
+            }
+            return null;
+        },
+
+        /**
+         * Prime をブラウザで開く形。wp= / wpn= は Amazon のページで動くこのスクリプトが、
+         * 入るルームとなまえを知るため（Amazon は知らない指定を無視する）。
+         * 時刻の指定は Web プレイヤーも無視するので付けない。合わせるのはスクリプトの仕事。
+         */
+        primeWeb(v, room, name, android) {
+            if (v.service !== 'prime') return null;
+            const path = `www.amazon.co.jp/gp/video/detail/${enc(v.contentId)}/` +
+                `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}`;
+            // Android は amazon.co.jp をアプリに横取りされるので、Chrome で開けと明示する
+            return android ? `intent://${path}#Intent;scheme=https;package=com.android.chrome;end` : `https://${path}`;
+        },
+
+        /** 時刻を付けずに開く形 */
+        plain(v) {
+            if (v.service === 'netflix') return `https://www.netflix.com/watch/${enc(v.contentId)}`;
+            if (v.service === 'youtube') return `https://www.youtube.com/watch?v=${enc(v.contentId)}`;
+            if (v.service === 'prime') return `https://app.primevideo.com/detail?asin=${enc(v.contentId)}`;
+            return null;
+        }
+    };
+
+    function safeColor(c) {
+        return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : '#cfd3ff';
+    }
+
+    /** 絵文字だけの発言は大きく出す（拡張機能側と同じ扱い） */
+    function isReaction(s) {
+        return typeof s === 'string' && s.length <= 8 &&
+            /^\p{Extended_Pictographic}[\p{Extended_Pictographic}‍️]*$/u.test(s);
+    }
+
+    /** チャットの1件を、文字だけで組み立てる */
+    function messageRow(m, me) {
+        const row = document.createElement('div');
+        const content = typeof m.content === 'string' ? m.content.slice(0, 500) : '';
+        if (m.type === 'system') {
+            row.className = 'msg system';
+            row.textContent = content;
+            return row;
+        }
+        row.className = 'msg' + (m.senderId === me ? ' me' : '') + (isReaction(content) ? ' big' : '');
+        const who = document.createElement('span');
+        who.className = 'name';
+        who.textContent = typeof m.username === 'string' ? m.username.slice(0, 20) : '？';
+        who.style.color = safeColor(m.color);
+        const body = document.createElement('span');
+        body.className = 'body';
+        body.textContent = content;
+        row.append(who, body);
+        return row;
+    }
+
+    /** サーバーへつなぐ（socket.io はこのスクリプトの中に入れてある） */
+    function connect() {
+        return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
+    }
+
+    const REACTIONS = ['😂', '😱', '😭', '👏', '❤️'];
+
+    return { SERVER, cleanVideo, cleanSec, cleanRoom, hhmmss, urls, safeColor, isReaction, messageRow, connect, REACTIONS };
+})();
+
+
+    if (location.origin === "https://example.com") {
+        // ---- userscript/hub.js ----
+/**
+ * 友達（スマホ）の画面。example.com の上に、このスクリプトが丸ごと描く。
+ *
+ * 以前は同期サーバー（Fly.io）が同じ画面（同伴ページ）を配っていたが、それだと
+ * サーバーを乗っ取られたときに偽の画面（ログインを求めるなど）を出されてしまう。
+ * 画面もプログラムも友達の iPhone に入っている固定のファイルから出すことで、その道を塞いだ（2026-09-13）。
+ *
+ * なぜ example.com か:
+ *   - 何のプログラムも動いていない、中身の変わらない静的なページ（IANA が管理）
+ *   - こちらのサーバーとは無関係なので、サーバーを乗っ取られても手が出せない
+ *   - 追加の制限（CSP）が無く、同期サーバーにつなげる
+ *   使えなくなったら HUB_ORIGIN（tools/build-userscript.js と extension/protocol.js）を変える。
+ *
+ * アドレスの #wp=ルームコード のときだけ動く。ふだんの example.com には何もしない。
+ *
+ * できること:
+ *   - チャット・参加者・ホストの今の位置
+ *   - Netflix … 「ホストに追いつく」でアプリがその場面から開く（?t=、実機で確認済み）
+ *   - YouTube … このページの中で再生し、ホストに自動で合わせ続ける（公式の埋め込みプレイヤー）
+ *   - Prime   … 「ブラウザで見る」で Amazon のページを開くと、そこでこのスクリプト（shim.js）が自動で合わせる
+ */
+const WP_HUB = (() => {
+    const CSS = `
+:root {
+    color-scheme: dark;
+    --bg: #0f0f13; --panel: #1a1a21; --line: #2c2c36;
+    --text: #f2f2f4; --muted: #9a9aa6; --accent: #3a6df0; --ok: #3ddc84;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, "Hiragino Sans", "Meiryo", sans-serif;
+    width: auto;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.wrap { max-width: 560px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+.lead { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+label { display: block; margin-top: 14px; font-size: 13px; color: var(--muted); }
+input {
+    width: 100%; margin-top: 4px; padding: 12px;
+    font: inherit; font-size: 16px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+}
+input::placeholder { color: #6b6b78; }
+button {
+    width: 100%; margin-top: 16px; padding: 14px;
+    font: inherit; font-size: 16px; font-weight: 600;
+    background: var(--accent); color: #fff;
+    border: 0; border-radius: 8px; cursor: pointer; touch-action: manipulation;
+}
+button.sub { background: #3a3a46; font-weight: 400; }
+button:disabled { opacity: .5; }
+.err { color: #ff6b6b; font-size: 13px; margin-top: 12px; min-height: 20px; }
+.bar { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.bar .code { font-size: 18px; font-weight: 700; letter-spacing: .08em; }
+.bar .minitime {
+    font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--ok); flex: 1; text-decoration: none;
+    padding: 8px 10px; margin: -8px -4px; border-radius: 8px; background: rgba(61,220,132,.12);
+}
+.bar .count { color: var(--muted); font-size: 13px; }
+.bar button { width: auto; margin: 0; padding: 10px 16px; font-size: 14px; min-height: 44px; }
+.now { margin: 20px 0; padding: 20px 16px; text-align: center; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.now .label { font-size: 13px; color: var(--muted); }
+.now .time { font-size: 44px; font-weight: 700; line-height: 1.1; margin: 6px 0; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.now .state { font-size: 14px; color: var(--muted); }
+.now .state .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
+.now.playing .state .dot { background: var(--ok); }
+.now .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+.cue .target { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cue .left { font-size: 15px; color: var(--muted); margin-top: 6px; }
+.cue .steps { font-size: 13px; color: var(--muted); text-align: left; margin: 12px 0 0; padding-left: 1.2em; }
+.cue .steps li { margin: 3px 0; }
+.now.fire { background: #1d6b3f; border-color: var(--ok); animation: flash .4s steps(1) 4; }
+@keyframes flash { 50% { background: #3ddc84; color: #06210f; } }
+.now.fire .time { color: #fff; }
+.help { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 12px; }
+.help summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 8px 0; }
+.help ol { padding-left: 1.3em; font-size: 14px; }
+.help li { margin: 6px 0; }
+.help p { font-size: 13px; color: var(--muted); }
+.title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.title-row .what { flex: 1; min-width: 0; font-size: 14px; word-break: break-all; }
+.title-row .what .svc { color: var(--muted); font-size: 12px; display: block; }
+.title-row a {
+    padding: 12px 16px; border-radius: 8px; background: #3a3a46;
+    color: var(--text); text-decoration: none; font-size: 14px; white-space: nowrap;
+    display: inline-flex; align-items: center; min-height: 44px;
+}
+.jump {
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 14px; padding: 16px; min-height: 52px;
+    background: var(--accent); color: #fff; text-decoration: none;
+    border-radius: 10px; font-size: 17px; font-weight: 700; text-align: center;
+}
+.jump.jump-web { background: #1f8a5a; margin-top: 8px; }
+.jump.jump-app { background: #3a3a46; font-size: 15px; font-weight: 400; min-height: 44px; padding: 10px; }
+.jump-note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+h2 { font-size: 13px; color: var(--muted); font-weight: 400; margin: 18px 0 6px; }
+.people { display: flex; flex-wrap: wrap; gap: 6px; }
+.person { padding: 5px 10px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
+.person .tag { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--accent); color: #fff; margin-left: 5px; }
+.person .tag.view { background: #55556a; }
+.tabs { display: flex; gap: 8px; margin: 12px 0; }
+.tabs .tab {
+    flex: 1; width: auto; margin: 0; padding: 12px 8px; min-height: 46px;
+    background: var(--panel); border: 1px solid var(--line);
+    color: var(--muted); font-size: 15px; font-weight: 400;
+}
+.tabs .tab.on { background: var(--accent); color: #fff; font-weight: 600; border-color: var(--accent); }
+.tabs .tab .badge { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 6px; border-radius: 10px; background: #e5484d; color: #fff; font-size: 12px; font-weight: 700; }
+.yt-wrap { margin-bottom: 14px; }
+.yt-box { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; }
+.yt-box iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.yt-start {
+    width: 100%; margin-top: 10px; padding: 16px; min-height: 52px;
+    background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+    font-size: 17px; font-weight: 700; cursor: pointer; touch-action: manipulation;
+}
+.yt-note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.yt-blocked { margin: 0 0 12px; padding: 12px; border-radius: 10px; background: #3a2f12; border: 1px solid #8a6d1f; font-size: 13px; line-height: 1.6; }
+.banner { padding: 12px; margin-bottom: 10px; border-radius: 10px; text-align: center; font-weight: 700; font-size: 15px; background: #2a2a35; border: 1px solid var(--line); }
+.banner.fire { background: #1d6b3f; border-color: var(--ok); color: #fff; font-size: 18px; animation: flash .4s steps(1) 4; }
+#tab-chat { display: flex; flex-direction: column; }
+.msgs {
+    flex: 1; height: calc(100vh - 210px); min-height: 160px; overflow-y: auto; padding: 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    display: flex; flex-direction: column; gap: 6px; overscroll-behavior: contain;
+}
+.composer {
+    position: fixed; left: 0; right: 0; bottom: 0; max-width: 560px; margin: 0 auto;
+    padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--bg); border-top: 1px solid var(--line); z-index: 5;
+}
+.composer .reactions { margin-top: 0; }
+.msg { word-break: break-word; font-size: 14px; }
+.msg .name { font-weight: 700; margin-right: 6px; }
+.msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
+.msg.system { color: var(--muted); font-size: 12px; text-align: center; }
+.msg.big .body { font-size: 26px; line-height: 1.2; }
+.empty { color: #6b6b78; font-size: 13px; text-align: center; margin: auto 0; }
+.reactions { display: flex; gap: 6px; margin-top: 8px; }
+.reactions button { width: auto; flex: 1; margin: 0; padding: 8px 0; font-size: 22px; background: var(--panel); border: 1px solid var(--line); }
+.send-row { display: flex; gap: 8px; margin-top: 8px; }
+.send-row input { margin-top: 0; }
+.send-row button { width: auto; margin: 0; padding: 12px 18px; }
+.note { color: var(--muted); font-size: 12px; margin-top: 20px; }
+[hidden] { display: none !important; }
+`;
+
+    // 画面の骨組み。**サーバーから来た文字はここに入れない**（あとで textContent で入れる）
+    const MARKUP = `
+<div class="wrap">
+    <section id="join-view">
+        <h1>Watch Party に参加</h1>
+        <p class="lead">
+            <strong>チャット・参加者・ホストが今どこを見ているか</strong>が分かります。
+            YouTube と Prime Video（ブラウザで見る）は<strong>ホストに自動で合わせます</strong>。
+        </p>
+        <label for="room">ルームコード</label>
+        <input id="room" maxlength="12" placeholder="ABC123" autocapitalize="characters" autocomplete="off" inputmode="text">
+        <label for="name">なまえ</label>
+        <input id="name" maxlength="20" placeholder="なまえ" autocomplete="nickname">
+        <button id="btn-join">参加する</button>
+        <div class="err" id="join-err"></div>
+        <details class="help">
+            <summary>はじめての方へ（見るまでの手順）</summary>
+            <ol>
+                <li>上に<strong>なまえ</strong>を入れて「参加する」を押す</li>
+                <li><strong>Netflix</strong> … 青い「▶ ホストに追いつく（Netflix を見る）」を押すと、アプリがホストと同じ場面から開きます</li>
+                <li><strong>Prime Video</strong> … 緑の「🌐 ブラウザで見る（Prime Video を見る）」を押すと、Amazon のページで再生が始まり、ホストに自動で合わせ続けます</li>
+                <li><strong>YouTube</strong> … このページの中で再生されます。「▶ 一緒に見る（YouTube を見る）」を1回押すだけです</li>
+            </ol>
+            <p>
+                <strong>見ながらチャットするには（小窓）</strong><br>
+                最初に1回だけ、iPhone の<strong>設定 → 一般 → ピクチャインピクチャ →「自動的に開始」</strong>をオン。
+                Netflix はアプリが開いたら画面<strong>左上の「◀ Safari」</strong>で戻ると、動画が小窓になります
+                （Netflix の広告つきプランでは小窓が使えません）。
+            </p>
+            <p>
+                このページは、スマホに入れた Watch Party のスクリプトが描いています。
+                <strong>このページや Watch Party が、パスワードやカード番号を聞くことはありません。</strong>
+            </p>
+        </details>
+    </section>
+
+    <section id="room-view" hidden>
+        <div class="bar">
+            <span class="code" id="room-code">------</span>
+            <a class="minitime" id="minitime" target="_blank" rel="noopener noreferrer">--:--</a>
+            <span class="count" id="count"></span>
+            <button class="sub" id="btn-leave">退出</button>
+        </div>
+
+        <p class="yt-blocked" id="yt-blocked" hidden></p>
+        <a class="jump jump-web" id="jump-web" target="_blank" rel="noopener noreferrer" hidden></a>
+        <a class="jump" id="jump" target="_blank" rel="noopener noreferrer" hidden></a>
+        <p class="jump-note" id="jump-note" hidden></p>
+
+        <div class="yt-wrap" id="yt-wrap" hidden>
+            <div class="yt-box"><div id="yt-player"></div></div>
+            <button class="yt-start" id="yt-start">▶ 一緒に見る（YouTube を見る）</button>
+            <p class="yt-note" id="yt-note">一度押すと、あとは<strong>ホストの再生・停止・シークに自動でついていきます</strong>。操作は要りません。</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab" data-tab="chat">💬 チャット</button>
+            <button class="tab on" data-tab="sync">⏱ 合わせる</button>
+        </div>
+
+        <div class="banner" id="banner" hidden></div>
+
+        <section id="tab-sync">
+            <div class="now" id="now">
+                <div class="label">ホストが見ているところ</div>
+                <div class="time" id="time">--:--</div>
+                <div class="state"><span class="dot"></span><span id="state">つないでいます…</span></div>
+                <div class="hint" id="hint">この時刻にアプリの再生位置を合わせてください</div>
+                <div class="cue" id="cue" hidden>
+                    <div class="label" id="cue-label">いまが合わせ時です</div>
+                    <div class="target" id="cue-target">--:--</div>
+                    <div class="left" id="cue-left"></div>
+                    <ol class="steps">
+                        <li>アプリを上の時刻に合わせる（<strong>10秒送り／戻し</strong>が正確です）</li>
+                        <li>そこで<strong>一時停止</strong>して待つ</li>
+                        <li>この画面が光ったら<strong>再生</strong>を押す</li>
+                    </ol>
+                </div>
+            </div>
+            <div class="title-row">
+                <span class="what" id="what"></span>
+                <a id="open-app" target="_blank" rel="noopener noreferrer" hidden>アプリで開く</a>
+            </div>
+            <h2>参加者</h2>
+            <div class="people" id="people"></div>
+            <p class="note">動画の再生・停止はホストの操作だけが反映されます。このページからホストの動画は操作できません。</p>
+        </section>
+
+        <section id="tab-chat" hidden>
+            <div class="msgs" id="msgs"><div class="empty">まだメッセージはありません</div></div>
+            <div class="composer">
+                <div class="reactions" id="reactions"></div>
+                <form class="send-row" id="send-form">
+                    <input id="msg" maxlength="500" placeholder="メッセージ" autocomplete="off">
+                    <button type="submit">送信</button>
+                </form>
+            </div>
+        </section>
+    </section>
+</div>`;
+
+    /** アドレスが #wp / #wp=ルームコード のときだけ動く */
+    function wanted() {
+        return /^#wp(?:=|$)/i.test(location.hash);
+    }
+
+    function start() {
+        document.documentElement.innerHTML =
+            '<head><meta charset="utf-8">' +
+            '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">' +
+            '<title>Watch Party</title><style>' + CSS + '</style></head><body>' + MARKUP + '</body>';
+        run();
+    }
+
+    function run() {
+        const $ = (id) => document.getElementById(id);
+        const U = WP_US;
+        const MAX_SHOWN = 100;
+        const android = /Android/i.test(navigator.userAgent);
+
+        let socket = null;
+        let me = null;
+        let room = null;
+        let name = null;
+        let users = [];
+
+        // ホストの再生位置。通知は5秒ごとなので、再生中はこちらで進める
+        let base = 0;
+        let baseAt = 0;
+        let playing = false;
+        let hostAd = false;
+        let hasHost = true;
+
+        /** 作品（cleanVideo を通したもの）。無ければ null */
+        let videoState = null;
+
+        const hostTime = () => (playing ? base + (Date.now() - baseAt) / 1000 : base);
+
+        function tick() {
+            const t = hostTime();
+            $('time').textContent = U.hhmmss(t);
+            $('now').classList.toggle('playing', playing);
+            $('state').textContent =
+                !hasHost ? 'ホストがいません（パソコンの人が参加すると始まります）'
+                : hostAd ? 'ホストは広告を見ています'
+                : playing ? '再生中'
+                : '停止中';
+            $('minitime').textContent = U.hhmmss(t);
+            refreshJump();
+            fitChat();
+        }
+
+        /** メッセージ欄の高さを、画面の残りにぴったり合わせる（入力欄は一番下に固定） */
+        function fitChat() {
+            if (tab !== 'chat' || $('tab-chat').hidden) return;
+            const msgs = $('msgs');
+            const composer = document.querySelector('.composer');
+            const view = globalThis.visualViewport ? globalThis.visualViewport.height : window.innerHeight;
+            const top = msgs.getBoundingClientRect().top;
+            const left = Math.floor(view - top - composer.getBoundingClientRect().height - 8);
+            const h = Math.max(120, left) + 'px';
+            if (msgs.style.height !== h) msgs.style.height = h;
+        }
+        globalThis.addEventListener('resize', () => fitChat());
+        globalThis.visualViewport?.addEventListener('resize', () => fitChat());
+
+        // --- YouTube の埋め込みプレイヤー ----------------------------------------
+        // iPhone は playsinline が無いと全画面に持っていかれ、人が一度タップするまで再生を始められない
+
+        const YT_SEEK_THRESHOLD_SEC = 1.5;
+        const YT_FOLLOW_MS = 2000;
+
+        let yt = null;
+        let ytReady = false;
+        let ytVideoId = null;
+        let ytEmbedBlocked = false;
+        let ytUnlocked = false;
+        let ytFollowTimer = null;
+
+        const isYouTube = () => Boolean(videoState && videoState.service === 'youtube');
+        const embedYouTube = () => isYouTube() && !ytEmbedBlocked;
+
+        /** 埋め込みで再生できなかった → アプリで開く方式に切り替える */
+        function giveUpEmbed(code) {
+            ytEmbedBlocked = true;
+            socket?.emit('client-error', {
+                code: Number.isInteger(code) ? code : null,
+                videoId: videoState && videoState.contentId,
+                ua: navigator.userAgent
+            });
+            $('yt-wrap').hidden = true;
+            const why =
+                code === 100 ? 'この動画は見つからないか、非公開です。'
+                : code === 5 ? 'この動画は、この端末のブラウザでは再生できません（映画などの保護された動画で起きます）。'
+                : 'この動画はページの中では再生できませんでした（投稿者が埋め込みを許可していない動画や、年齢制限のある動画など）。';
+            $('yt-blocked').textContent = why +
+                ' すぐ下の「ホストに追いつく（YouTube アプリで見る）」を押すと、YouTube のアプリがホストと同じ場面から開きます。' +
+                `（エラー ${Number.isInteger(code) ? code : '不明'}）`;
+            $('yt-blocked').hidden = false;
+            renderVideo();
+            tick();
+        }
+
+        function loadYouTubeApi() {
+            if (globalThis.YT && globalThis.YT.Player) return Promise.resolve();
+            if (loadYouTubeApi.pending) return loadYouTubeApi.pending;
+            loadYouTubeApi.pending = new Promise((resolve) => {
+                globalThis.onYouTubeIframeAPIReady = resolve;
+                const s = document.createElement('script');
+                s.src = 'https://www.youtube.com/iframe_api';   // YouTube 公式の埋め込み用。決まったアドレス
+                document.head.appendChild(s);
+            });
+            return loadYouTubeApi.pending;
+        }
+
+        async function ensureYouTube() {
+            if (isYouTube() && ytVideoId && ytVideoId !== videoState.contentId) {
+                ytEmbedBlocked = false;
+                $('yt-blocked').hidden = true;
+            }
+            if (!embedYouTube()) {
+                $('yt-wrap').hidden = true;
+                return;
+            }
+            $('yt-wrap').hidden = false;
+            await loadYouTubeApi();
+            if (!embedYouTube()) return;
+
+            if (yt && ytVideoId === videoState.contentId) return;
+            if (yt) {
+                ytVideoId = videoState.contentId;
+                try { yt.loadVideoById({ videoId: ytVideoId, startSeconds: hostTime() }); } catch { /* 準備前 */ }
+                return;
+            }
+
+            ytVideoId = videoState.contentId;
+            yt = new globalThis.YT.Player('yt-player', {
+                videoId: ytVideoId,
+                playerVars: { playsinline: 1, rel: 0, modestbranding: 1, controls: 1 },
+                events: {
+                    onReady: () => {
+                        ytReady = true;
+                        applyYouTube(true);
+                        clearInterval(ytFollowTimer);
+                        ytFollowTimer = setInterval(() => applyYouTube(false), YT_FOLLOW_MS);
+                    },
+                    onError: (e) => giveUpEmbed(e && e.data)
+                }
+            });
+        }
+
+        /** ホストに合わせる。force … 大きくずれていなくても位置を合わせ直す */
+        function applyYouTube(force) {
+            if (!yt || !ytReady || !embedYouTube()) return;
+            const want = hostTime();
+            let now;
+            try { now = yt.getCurrentTime(); } catch { return; }
+            try {
+                if (force || Math.abs(now - want) > YT_SEEK_THRESHOLD_SEC) yt.seekTo(want, true);
+                if (!ytUnlocked) return;
+                const state = yt.getPlayerState();
+                const isPlaying = state === 1 || state === 3;
+                if (playing && !isPlaying) yt.playVideo();
+                else if (!playing && isPlaying) yt.pauseVideo();
+            } catch { /* 準備前・切り替え中 */ }
+        }
+
+        // 自動テストが埋め込みプレイヤーの位置を読むための口（読むだけ）
+        globalThis.__wpYouTubeState = () => {
+            if (!yt || !ytReady) return null;
+            try { return { t: yt.getCurrentTime(), state: yt.getPlayerState(), unlocked: ytUnlocked }; }
+            catch { return null; }
+        };
+
+        $('yt-start').addEventListener('click', () => {
+            ytUnlocked = true;
+            $('yt-start').hidden = true;
+            $('yt-note').textContent = 'ホストに合わせて自動で動きます。操作は要りません。';
+            try { yt?.playVideo(); } catch { /* 準備前 */ }
+            applyYouTube(true);
+        });
+
+        // --- タブ ------------------------------------------------------------
+        let tab = 'sync';
+        let unread = 0;
+
+        function setTab(t) {
+            tab = t;
+            for (const b of document.querySelectorAll('.tab')) b.classList.toggle('on', b.dataset.tab === t);
+            $('tab-chat').hidden = t !== 'chat';
+            $('tab-sync').hidden = t !== 'sync';
+            if (t === 'chat') {
+                unread = 0;
+                renderUnread();
+                fitChat();
+                $('msgs').scrollTop = $('msgs').scrollHeight;
+            }
+        }
+
+        function renderUnread() {
+            const btn = document.querySelector('.tab[data-tab="chat"]');
+            btn.textContent = '💬 チャット';
+            if (unread > 0) {
+                const b = document.createElement('span');
+                b.className = 'badge';
+                b.textContent = unread > 99 ? '99+' : String(unread);
+                btn.appendChild(b);
+            }
+        }
+
+        for (const b of document.querySelectorAll('.tab')) b.addEventListener('click', () => setTab(b.dataset.tab));
+        setInterval(tick, 250);
+
+        // --- 「せーの」で合わせる（アプリで見ていて、時刻を渡せないとき用）------------
+
+        let cueAt = null;
+        let cueFired = false;
+        let audio = null;
+
+        function beep() {
+            try {
+                if (!audio) return;
+                const osc = audio.createOscillator();
+                const gain = audio.createGain();
+                osc.connect(gain); gain.connect(audio.destination);
+                osc.frequency.value = 880;
+                gain.gain.setValueAtTime(0.001, audio.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.3, audio.currentTime + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.5);
+                osc.start();
+                osc.stop(audio.currentTime + 0.5);
+            } catch { /* 音が出せなくても光は出る */ }
+        }
+
+        function armCue() {
+            cueAt = base;
+            cueFired = false;
+            $('cue-target').textContent = U.hhmmss(cueAt);
+            $('cue-left').textContent = 'ホストが再生したら、ここが光ります';
+            $('cue').hidden = false;
+            $('hint').textContent = 'ホストが止まっています。いまが合わせ時です';
+            $('banner').textContent = `⏱ いまが合わせ時 — ${U.hhmmss(cueAt)} に合わせて一時停止`;
+            $('banner').className = 'banner';
+            $('banner').hidden = false;
+        }
+
+        function stopCue() {
+            cueAt = null;
+            cueFired = false;
+            $('cue').hidden = true;
+            $('now').classList.remove('fire');
+            $('banner').hidden = true;
+            $('banner').className = 'banner';
+            $('hint').textContent = 'この時刻にアプリの再生位置を合わせてください';
+        }
+
+        function fireCue() {
+            if (cueAt === null || cueFired) return;
+            cueFired = true;
+            $('now').classList.add('fire');
+            $('cue-left').textContent = 'いま再生を押してください！';
+            $('banner').textContent = '▶ いま再生を押してください！';
+            $('banner').className = 'banner fire';
+            $('banner').hidden = false;
+            beep();
+            setTimeout(() => { if (cueFired) stopCue(); }, 8000);
+        }
+
+        function renderPeople() {
+            const box = $('people');
+            box.textContent = '';
+            for (const u of users) {
+                if (!u || typeof u !== 'object') continue;
+                const el = document.createElement('span');
+                el.className = 'person';
+                el.textContent = typeof u.name === 'string' ? u.name.slice(0, 20) : '？';
+                if (u.isHost || u.viewer) {
+                    const t = document.createElement('span');
+                    t.className = u.isHost ? 'tag' : 'tag view';
+                    t.textContent = u.isHost ? 'ホスト' : '観覧';
+                    el.appendChild(t);
+                }
+                box.appendChild(el);
+            }
+            $('count').textContent = users.length ? `${users.length}人` : '';
+            hasHost = users.some(u => u && u.isHost);
+        }
+
+        function addMessage(m) {
+            const box = $('msgs');
+            box.querySelector('.empty')?.remove();
+            const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+            box.appendChild(U.messageRow(m, me));
+            while (box.children.length > MAX_SHOWN) box.firstChild.remove();
+            if (nearEnd || m.senderId === me) box.scrollTop = box.scrollHeight;
+            if (tab !== 'chat' && m.type === 'user' && m.senderId !== me) {
+                unread++;
+                renderUnread();
+            }
+        }
+
+        // --- 追いつく・ブラウザで見る ------------------------------------------------
+
+        // アプリが開いて再生が始まるまでの見込み（秒）。その分だけ先を狙う
+        const LAUNCH_LEAD_SEC = 5;
+
+        /** ボタンの下の案内（決まった文だけ。サーバーの文字は入らない） */
+        function renderJumpNote() {
+            const note = $('jump-note');
+            const back = android ? 'スマホの<strong>ホームに戻る操作</strong>をすると'
+                : '画面<strong>左上の「◀ Safari」</strong>を押すと';
+            let html;
+            if (videoState && videoState.service === 'prime') {
+                html =
+                    '<strong>🌐 ブラウザで見る（Prime Video を見る）</strong>… 開くだけで<strong>ホストの位置に自動で合わせ続けます</strong>。' +
+                    'チャットもそのページで打てます。<br>' +
+                    '<strong>アプリで開く（Prime Video アプリ）</strong>… アプリは作品ページで止まり、自動では合いません。';
+            } else {
+                html =
+                    '押すとアプリが開いて、<strong>ホストと同じ場面から始まります</strong>。<br>' +
+                    `アプリが開いたら、${back}<strong>動画が小窓になって、このチャットに戻れます。</strong>` +
+                    (android ? '' :
+                        '<br>⚠ <strong>右上のサイト名は押さないでください。</strong>' +
+                        '押すと次からブラウザで開くようになります（直すには、ボタンを長押し →「アプリで開く」）。');
+            }
+            if (note.dataset.html !== html) {
+                note.innerHTML = html;
+                note.dataset.html = html;
+            }
+        }
+
+        function refreshJump() {
+            const web = $('jump-web');
+            const link = $('jump');
+            const v = videoState;
+            const t = hostTime() + LAUNCH_LEAD_SEC;
+
+            const webUrl = v ? U.urls.primeWeb(v, room || '', name || '', android) : null;
+            if (webUrl) {
+                web.href = webUrl;
+                web.textContent = `🌐 ブラウザで見る（Prime Video を見る）  ${U.hhmmss(hostTime())}`;
+                web.hidden = false;
+            } else {
+                web.hidden = true;
+            }
+
+            // YouTube をページの中で再生できているなら、アプリで開く必要が無い
+            const url = v && !embedYouTube() ? U.urls.app(v, t) : null;
+            if (!url) {
+                link.hidden = true;
+                $('jump-note').hidden = true;
+                $('minitime').removeAttribute('href');
+                return;
+            }
+            link.href = url;
+            link.className = v.service === 'prime' ? 'jump jump-app' : 'jump';
+            // 何の動画を見るボタンか、ひと目で分かるように括弧で添える（ユーザー要望）
+            const svcLabel = { netflix: 'Netflix を見る', youtube: 'YouTube アプリで見る' }[v.service];
+            link.textContent = v.service === 'prime' ? '▶ アプリで開く（Prime Video アプリ）'
+                : `▶ ホストに追いつく（${svcLabel}）  ${U.hhmmss(hostTime())}`;
+            link.hidden = false;
+            renderJumpNote();
+            $('jump-note').hidden = false;
+            $('minitime').href = webUrl || url;
+        }
+
+        /** 作品の表示と「アプリで開く」リンク */
+        function renderVideo() {
+            ensureYouTube();
+            const link = $('open-app');
+            const what = $('what');
+            what.textContent = '';
+            const tag = document.createElement('span');
+            tag.className = 'svc';
+            const v = videoState;
+            if (!v) {
+                tag.textContent = '作品';
+                what.append(tag, 'ホストが作品を開くのを待っています');
+                link.hidden = true;
+                return;
+            }
+            const svc = { netflix: 'Netflix', prime: 'Prime Video', youtube: 'YouTube' }[v.service];
+            tag.textContent = svc;
+            if (v.service === 'youtube' && !ytEmbedBlocked) {
+                what.append(tag, 'ここで一緒に見られます');
+                link.hidden = true;
+                return;
+            }
+            what.append(tag, v.contentId);
+            link.href = U.urls.plain(v);
+            link.textContent = `${svc} で開く`;
+            link.hidden = false;
+        }
+        renderVideo();
+
+        /** サーバーから届いた作品情報で置き換える（形が合わなければ「作品なし」） */
+        function setVideo(raw) {
+            const next = U.cleanVideo(raw);
+            // 同じ作品で GTI が既に分かっていれば引き継ぐ
+            if (next && videoState && !next.appId && next.service === videoState.service &&
+                next.contentId === videoState.contentId) {
+                next.appId = videoState.appId;
+            }
+            videoState = next;
+            renderVideo();
+        }
+
+        // --- 接続 -----------------------------------------------------------
+
+        function connect() {
+            socket = U.connect();
+
+            socket.on('connect', () => {
+                me = socket.id;
+                socket.emit('join-room', { roomId: room, username: name, viewer: true });
+            });
+
+            socket.on('connect_error', () => {
+                $('join-err').textContent = 'サーバーにつなげませんでした';
+                $('btn-join').disabled = false;
+            });
+
+            socket.on('update-participants', (list) => {
+                users = Array.isArray(list) ? list.slice(0, 50) : [];
+                renderPeople();
+            });
+            socket.on('update-host', () => renderPeople());
+            socket.on('receive-message', (m) => { if (m && typeof m === 'object') addMessage(m); });
+
+            socket.on('update-video-state', (s) => {
+                if (!s || typeof s !== 'object') return;
+                base = U.cleanSec(s.currentTime) ?? 0;
+                baseAt = Date.now();
+                playing = Boolean(s.isPlaying);
+                hostAd = false;
+                setVideo(s);
+                if (isYouTube()) applyYouTube(true);
+                tick();
+            });
+
+            socket.on('sync-video', (p) => {
+                if (!p || typeof p !== 'object') return;
+                const sec = U.cleanSec(p.currentTime);
+                if (sec === null) return;
+                base = sec;
+                baseAt = Date.now();
+                if (p.type === 'play') { playing = true; hostAd = false; }
+                else if (p.type === 'pause') playing = false;
+                else if (p.type === 'tick') {
+                    hostAd = Boolean(p.ad);
+                    playing = !p.paused && !p.ad;
+                }
+                if (!playing && !hostAd && cueAt === null) armCue();
+                else if (playing && cueAt !== null) fireCue();
+                else if (!playing && cueAt !== null && !cueFired && base !== cueAt) {
+                    cueAt = base;
+                    $('cue-target').textContent = U.hhmmss(cueAt);
+                }
+                if (isYouTube()) applyYouTube(p.type === 'seek' || p.type === 'play');
+                tick();
+            });
+
+            // Prime の GTI。作品情報とは別便で、あとから届く
+            socket.on('video-meta', (m) => {
+                if (!m || !videoState || m.contentId !== videoState.contentId) return;
+                const withApp = U.cleanVideo({ ...videoState, appId: m.appId });
+                if (withApp && withApp.appId) videoState = withApp;
+                tick();
+            });
+
+            socket.on('change-video', (v) => {
+                if (!v) return;
+                base = 0; baseAt = Date.now(); playing = false;
+                setVideo(v);
+                tick();
+            });
+
+            socket.on('action-rejected', (r) => {
+                if (r && r.reason === 'room-full') $('join-err').textContent = 'この部屋は満員です';
+                else if (r && r.reason === 'server-full') $('join-err').textContent = 'サーバーが混み合っています。少し待ってください';
+            });
+        }
+
+        // --- 操作 -----------------------------------------------------------
+
+        $('btn-join').addEventListener('click', () => {
+            const r = U.cleanRoom($('room').value.trim());
+            const n = $('name').value.trim().slice(0, 20);
+            $('join-err').textContent = '';
+            if (!r) {
+                $('join-err').textContent = 'ルームコードを入れてください（英数字）';
+                return $('room').focus();
+            }
+            if (!n) {
+                $('join-err').textContent = 'なまえを入れてください';
+                return $('name').focus();
+            }
+            room = r; name = n;
+            try { localStorage.setItem('wp:name', n); } catch { /* 使えない設定 */ }
+
+            // iPhone は人が押した流れでないと音を出せない。この参加のタップで用意しておく
+            try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (Ctx && !audio) audio = new Ctx();
+                audio?.resume?.();
+            } catch { /* 音なしで続ける */ }
+
+            $('btn-join').disabled = true;
+            $('room-code').textContent = room;
+            $('join-view').hidden = true;
+            $('room-view').hidden = false;
+            try { history.replaceState(null, '', '#wp=' + room); } catch { /* 無視 */ }
+            connect();
+        });
+
+        $('btn-leave').addEventListener('click', () => {
+            socket?.disconnect();
+            socket = null;
+            users = [];
+            $('room-view').hidden = true;
+            $('join-view').hidden = false;
+            $('btn-join').disabled = false;
+            try { history.replaceState(null, '', '#wp'); } catch { /* 無視 */ }
+        });
+
+        // アプリで見ている間は裏に回り、接続が切れることがある。戻ってきたら取り直す
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible' || !room) return;
+            if (!socket || !socket.connected) {
+                socket?.close();
+                connect();
+            } else {
+                socket.emit('request-sync');
+            }
+        });
+
+        $('send-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const text = $('msg').value.trim();
+            if (!text || !socket) return;
+            socket.emit('send-message', { message: text });
+            $('msg').value = '';
+        });
+
+        for (const r of U.REACTIONS) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = r;
+            b.addEventListener('click', () => socket?.emit('send-message', { message: r }));
+            $('reactions').appendChild(b);
+        }
+
+        try { $('name').value = localStorage.getItem('wp:name') || ''; } catch { /* 同上 */ }
+        const m = /^#wp=([A-Za-z0-9]{4,12})$/.exec(location.hash);
+        if (m) $('room').value = m[1].toUpperCase();
+    }
+
+    return { wanted, start };
+})();
+
+        if (WP_HUB.wanted()) WP_HUB.start();
+        return;
+    }
+
+    if (location.hostname !== 'www.amazon.co.jp') return;
+
+    // ---- userscript/shim.js ----
+/**
+ * スマホのブラウザ（iPhone の Safari ＋ Userscripts）で Prime をホストに自動で合わせる、つなぎの部分。
+ * 見ながら打てるように、チャットもこのページに重ねて出す。
+ *
+ * 同期そのものは PC の拡張機能と**同じファイル**（adapters/prime.js と content/bridge.js）がやる。
+ * PC では bridge.js の相手を ui.js と background が務めているので、ここがその代わりをする:
+ *
+ *   サーバー（socket.io） ── このファイル ── window.postMessage ── bridge.js ── prime.js ── <video>
+ *
+ * どのルームに入るかは、友達の画面（hub.js）の「🌐 ブラウザで見る」が付ける ?wp=ルーム&wpn=なまえ で知る。
+ * Prime は再生を始めるとアドレスを書き換えるので、最初に読んだ値はタブの間 sessionStorage に覚えておく。
+ * どちらも無ければ何もしない（ふだんの Amazon の閲覧には一切手を出さない）。
+ *
+ * サーバーから届くものは common.js の決まりどおり「ただのデータ」として扱う
+ * （数と種類を検査してから bridge.js へ渡す。文字は textContent でしか出さない）。
+ */
+const WP_SHIM = (() => {
+    const SRC_BRIDGE = 'wp-bridge';   // bridge.js と同じ値
+    const SRC_UI = 'wp-ui';
+    const KEY = 'wp:userscript';
+    const PLAY_BLOCKED_MS = 3000;
+    const AMAZON_DETAIL = /\/gp\/video\/detail\/([A-Za-z0-9.]{10,80})(?=[/?#]|$)/;
+    const SYNC_TYPES = new Set(['play', 'pause', 'seek', 'tick']);
+
+    /** このタブが見るルーム。無ければ null（何もしない） */
+    function readRoom() {
+        const q = new URLSearchParams(location.search);
+        const room = WP_US.cleanRoom(q.get('wp'));
+        if (room) {
+            const id = AMAZON_DETAIL.exec(location.pathname);
+            const v = {
+                room,
+                name: (q.get('wpn') || '').slice(0, 20) || 'スマホ',
+                contentId: id ? id[1] : null
+            };
+            try { sessionStorage.setItem(KEY, JSON.stringify(v)); } catch { /* 使えない設定 */ }
+            return v;
+        }
+        try {
+            const saved = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+            if (saved && WP_US.cleanRoom(saved.room)) {
+                return {
+                    room: WP_US.cleanRoom(saved.room),
+                    name: String(saved.name || 'スマホ').slice(0, 20),
+                    contentId: typeof saved.contentId === 'string' ? saved.contentId : null
+                };
+            }
+        } catch { /* 壊れていたら無視 */ }
+        return null;
+    }
+
+    function start(target) {
+        const U = WP_US;
+        const toBridge = (type, payload) =>
+            window.postMessage({ source: SRC_UI, type, payload }, location.origin);
+
+        let hostPlaying = false;
+        let selfAd = false;
+        let hostAd = false;
+        let connected = false;
+        let me = null;
+        /** ホストが別の作品に変えたときの、その作品（cleanVideo 済み）。同じ作品なら null */
+        let otherVideo = null;
+
+        /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
+        function sameTitle(v) {
+            if (v.service !== 'prime') return false;
+            if (!target.contentId) return true;   // このページの作品が分からないときは止めない
+            return v.contentId === target.contentId;
+        }
+
+        // --- サーバー ---------------------------------------------------------
+        const socket = U.connect();
+
+        socket.on('connect', () => {
+            connected = true;
+            me = socket.id;
+            // player … 友達の画面とは別の、再生タブとしての接続。参加者一覧には出ない
+            socket.emit('join-room', { roomId: target.room, username: target.name, viewer: true, player: true });
+            toBridge('ROLE', { isHost: false });
+            render();
+        });
+        socket.on('disconnect', () => { connected = false; render(); });
+
+        /** ホストの作品がこのページと違うか確かめる。違えば合わせるのを止めて案内を出す */
+        function checkTitle(raw) {
+            if (!raw || typeof raw !== 'object' || !raw.contentId) return;
+            const v = U.cleanVideo(raw);
+            // 形の読めない作品に変わったときも、この作品を勝手に動かさない（開く案内は出さない）
+            otherVideo = !v ? { service: 'unknown' } : sameTitle(v) ? null : v;
+            render();
+        }
+
+        // ホストの操作と定期通知。検査してから bridge.js へ渡す（PC の background と同じ形）
+        socket.on('sync-video', (p) => {
+            if (!p || typeof p !== 'object' || !SYNC_TYPES.has(p.type)) return;
+            const sec = U.cleanSec(p.currentTime);
+            if (sec === null) return;
+            if (p.type === 'play') hostPlaying = true;
+            else if (p.type === 'pause') hostPlaying = false;
+            else if (p.type === 'tick') { hostPlaying = !p.paused && !p.ad; hostAd = Boolean(p.ad); }
+            if (!otherVideo) {
+                toBridge('APPLY', {
+                    type: p.type,
+                    currentTime: sec,
+                    timestamp: Number.isFinite(p.timestamp) ? p.timestamp : Date.now(),
+                    paused: Boolean(p.paused),
+                    ad: Boolean(p.ad)
+                });
+            }
+            render();
+        });
+
+        // 入った直後・広告明けに取りに行った「ホストの今」
+        socket.on('update-video-state', (s) => {
+            if (!s || typeof s !== 'object') return;
+            const sec = U.cleanSec(s.currentTime);
+            if (sec === null) return;
+            checkTitle(s);
+            hostPlaying = Boolean(s.isPlaying);
+            if (!otherVideo) {
+                toBridge('APPLY', {
+                    type: s.isPlaying ? 'play' : 'pause',
+                    currentTime: sec,
+                    timestamp: Number.isFinite(s.lastUpdate) ? s.lastUpdate : Date.now()
+                });
+            }
+            render();
+        });
+
+        socket.on('change-video', (v) => checkTitle(v));
+        socket.on('receive-message', (m) => { if (m && typeof m === 'object') addMessage(m); });
+
+        // --- bridge.js から ---------------------------------------------------
+        window.addEventListener('message', (ev) => {
+            if (ev.source !== window) return;
+            const d = ev.data;
+            if (!d || d.source !== SRC_BRIDGE) return;
+            if (d.type === 'READY') {
+                if (connected) socket.emit('request-sync');
+            } else if (d.type === 'STATUS') {
+                selfAd = Boolean(d.payload && d.payload.selfAd);
+                hostAd = Boolean(d.payload && d.payload.hostAd);
+                render();
+            }
+            // INFO / PLAYER_EVENT / DIAG / META は送らない（見ている側なので）
+        });
+
+        // --- 画面 -------------------------------------------------------------
+        // 骨組みは決まった文だけ。サーバーから来た文字は textContent で入れる
+        const host = document.createElement('div');
+        host.id = 'wp-userscript';
+        host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = `
+            <style>
+                :host { all: initial; }
+                * { box-sizing: border-box; font-family: -apple-system, system-ui, "Hiragino Sans", sans-serif; }
+                .top { position: fixed; left: 8px; top: 8px; right: 8px; pointer-events: none;
+                       display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+                .pill { pointer-events: auto; font: 600 12px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
+                        background: rgba(20,20,24,.85); border: 1px solid rgba(255,255,255,.2);
+                        border-radius: 999px; padding: 5px 10px; display: flex; gap: 6px; align-items: center; }
+                .dot { width: 8px; height: 8px; border-radius: 50%; background: #888; }
+                .dot.on { background: #3ddc84; }
+                .tap, .other { pointer-events: auto; display: block; border: 0; cursor: pointer; text-decoration: none;
+                       font: 700 16px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
+                       background: #3a6df0; border-radius: 10px; padding: 12px 16px; }
+                .other { background: #1f8a5a; max-width: 100%; }
+                .fab { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+                       pointer-events: auto; border: 0; border-radius: 999px; min-width: 56px; min-height: 48px;
+                       padding: 10px 16px; font: 700 16px/1 -apple-system, system-ui, sans-serif;
+                       color: #fff; background: rgba(58,109,240,.95); box-shadow: 0 2px 10px rgba(0,0,0,.4); }
+                .badge { display: inline-block; min-width: 20px; padding: 2px 6px; margin-left: 6px; border-radius: 10px;
+                         background: #e5484d; font-size: 12px; }
+                .panel { position: fixed; right: 8px; left: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+                         max-width: 420px; margin-left: auto; height: min(52vh, 420px);
+                         pointer-events: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px;
+                         background: rgba(15,15,19,.94); color: #f2f2f4; border: 1px solid #2c2c36; border-radius: 12px; }
+                .phead { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9a9aa6; }
+                .phead span { flex: 1; }
+                .close { border: 0; border-radius: 8px; background: #3a3a46; color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; }
+                .msgs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+                        font-size: 14px; line-height: 1.5; overscroll-behavior: contain; }
+                .msg { word-break: break-word; }
+                .msg .name { font-weight: 700; margin-right: 6px; }
+                .msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
+                .msg.system { color: #9a9aa6; font-size: 12px; text-align: center; }
+                .msg.big .body { font-size: 24px; line-height: 1.2; }
+                .reactions { display: flex; gap: 4px; }
+                .reactions button { flex: 1; border: 1px solid #2c2c36; background: #1a1a21; border-radius: 8px;
+                                    font-size: 20px; min-height: 40px; }
+                form { display: flex; gap: 6px; }
+                input { flex: 1; min-width: 0; font-size: 16px; padding: 10px; border-radius: 8px;
+                        border: 1px solid #2c2c36; background: #1a1a21; color: #f2f2f4; }
+                .send { border: 0; border-radius: 8px; background: #3a6df0; color: #fff; font-size: 16px; font-weight: 700; padding: 0 14px; min-height: 44px; }
+                [hidden] { display: none !important; }
+            </style>
+            <div class="top">
+                <div class="pill"><span class="dot"></span><span class="text">Watch Party</span></div>
+                <button class="tap" hidden>▶ タップして再開</button>
+                <a class="other" hidden></a>
+            </div>
+            <button class="fab">💬<span class="badge" hidden></span></button>
+            <div class="panel" hidden>
+                <div class="phead"><span>チャット</span><button class="close" aria-label="閉じる">✕</button></div>
+                <div class="msgs"></div>
+                <div class="reactions"></div>
+                <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
+            </div>`;
+        (document.body || document.documentElement).appendChild(host);
+        // Amazon のページの操作（タップで再生・キーで早送りなど）に取られないようにする
+        for (const t of ['click', 'touchstart', 'touchend', 'pointerdown', 'pointerup', 'keydown', 'keyup', 'keypress']) {
+            host.addEventListener(t, (e) => e.stopPropagation());
+        }
+        const q = (s) => root.querySelector(s);
+
+        // --- チャット -----------------------------------------------------------
+        let open = false;
+        let unread = 0;
+
+        function setOpen(v) {
+            open = v;
+            q('.panel').hidden = !open;
+            q('.fab').hidden = open;
+            if (open) {
+                unread = 0;
+                q('.msgs').scrollTop = q('.msgs').scrollHeight;
+            }
+            renderBadge();
+        }
+        function renderBadge() {
+            q('.badge').hidden = unread === 0;
+            q('.badge').textContent = unread > 99 ? '99+' : String(unread);
+        }
+        function addMessage(m) {
+            const box = q('.msgs');
+            const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+            box.appendChild(U.messageRow(m, me));
+            while (box.children.length > 100) box.firstChild.remove();
+            if (nearEnd || m.senderId === me) box.scrollTop = box.scrollHeight;
+            if (!open && m.type === 'user' && m.senderId !== me) {
+                unread++;
+                renderBadge();
+            }
+        }
+        q('.fab').addEventListener('click', () => setOpen(true));
+        q('.close').addEventListener('click', () => setOpen(false));
+        q('form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const input = q('input');
+            const text = input.value.trim();
+            if (!text || !connected) return;
+            socket.emit('send-message', { message: text });
+            input.value = '';
+        });
+        for (const r of U.REACTIONS) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = r;
+            b.addEventListener('click', () => { if (connected) socket.emit('send-message', { message: r }); });
+            q('.reactions').appendChild(b);
+        }
+
+        // --- 再生が止められたとき ------------------------------------------------
+        // iPhone は、人が触っていないと動画を再生できないことがある。
+        // ホストは再生中なのにこちらが止まったままなら、タップしてもらう
+        let blockedSince = 0;
+        q('.tap').addEventListener('click', () => {
+            const v = mainVideo();
+            if (v) v.play().catch(() => {});
+            socket.emit('request-sync');
+            blockedSince = 0;
+            render();
+        });
+        setInterval(() => {
+            const v = mainVideo();
+            const stuck = v && hostPlaying && !selfAd && !otherVideo && v.paused;
+            blockedSince = stuck ? (blockedSince || Date.now()) : 0;
+            render();
+        }, 1000);
+
+        function render() {
+            q('.dot').className = 'dot' + (connected ? ' on' : '');
+            q('.text').textContent =
+                !connected ? 'Watch Party つないでいます…'
+                : otherVideo ? 'ホストが別の作品に変えました'
+                : selfAd ? '広告のあと、ホストに合わせます'
+                : hostAd ? 'ホストの広告が終わるのを待っています'
+                : 'ホストに自動で合わせています';
+            q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
+            const other = q('.other');
+            const url = otherVideo ? U.urls.primeWeb(otherVideo, target.room, target.name, false) : null;
+            if (url) {
+                other.href = url;
+                other.textContent = '▶ ホストの作品を開く';
+                other.hidden = false;
+            } else {
+                other.hidden = true;
+            }
+        }
+        render();
+    }
+
+    /** 本編の <video>。拡張機能と同じ基準（5分以上で最長） */
+    function mainVideo() {
+        const vids = Array.from(document.querySelectorAll('video'))
+            .filter(v => Number.isFinite(v.duration) && v.duration >= 300);
+        return vids.length ? vids.reduce((a, b) => (b.duration > a.duration ? b : a)) : null;
+    }
+
+    return { readRoom, start };
+})();
+
+
+    // 友達の画面の「🌐 ブラウザで見る」から開いたタブだけで動く。ふだんの Amazon には何もしない
+    const target = WP_SHIM.readRoom();
+    if (!target) return;
+    WP_SHIM.start(target);
+
+    // ---- extension/adapters/base.js ----
+/**
+ * サービスアダプタの基底クラス。
+ *
+ * サービスごとの差異はすべてこのインターフェースの内側に閉じ込める。
+ * ここさえ守れば、対応サービスの追加は adapters/ にファイルを1枚足すだけで済む。
+ *
+ * 実装が必要なもの:
+ *   static match(url)  … このアダプタが担当する URL か
+ *   ready()            … プレイヤーが操作可能になるまで待つ
+ *   getCurrentTime()   … 秒
+ *   getDuration()      … 秒
+ *   isPaused()
+ *   isInAd()           … 広告を再生中か（広告の無いサービスは false のまま）
+ *   play() / pause()
+ *   seek(seconds)
+ *   onStateChange(cb)  … cb({ type: 'play'|'pause'|'seek', currentTime })
+ *   getContentId(url)  … ルーム共有用の作品 ID
+ *   buildUrl(contentId)… 参加者を飛ばす先の URL
+ */
+(() => {
+    class ServiceAdapter {
+        /** @returns {string} サービス識別子 */
+        static get service() { return 'base'; }
+
+        /** @param {string} _url */
+        static match(_url) { return false; }
+
+        constructor() {
+            this._listeners = [];
+            this._diagListeners = [];
+        }
+
+        async ready() { throw new Error('not implemented'); }
+        getCurrentTime() { throw new Error('not implemented'); }
+        getDuration() { return NaN; }
+        isPaused() { throw new Error('not implemented'); }
+        isInAd() { return false; }
+        /** プレイヤーが画面に開いているか */
+        isPlayerOpen() { return false; }
+        /**
+         * URL が変わっても作品の切り替えとみなさないか。
+         * 既定はプレイヤーが開いている間（Prime は再生を始めると同じ作品の URL を書き換える）。
+         * Netflix のように、URL の変化がそのまま別の話数を意味するサービスは false を返す。
+         */
+        ignoreUrlChange() { return this.isPlayerOpen(); }
+        /** ホストになったとき、ゲストとして合わせていた状態の強制をやめる（人の操作を邪魔しない） */
+        releaseControl() {}
+        /** 広告の見分けがうまくいっているかを確かめるための、ページの様子の記録 */
+        describeForDiag() { return {}; }
+        /**
+         * サービス側の確認ダイアログ（Netflix の「まだ見ていますか？」など）を進める。
+         * ホストのときだけ呼ばれる。押したら true。
+         */
+        dismissInterruption() { return false; }
+        play() { throw new Error('not implemented'); }
+        pause() { throw new Error('not implemented'); }
+        seek(_seconds) { throw new Error('not implemented'); }
+        getContentId(_url) { return null; }
+        buildUrl(_contentId) { return null; }
+        /**
+         * スマホのアプリを開くときに使う、サービス内部の作品 ID（無ければ null）。
+         * Prime は ASIN ではアプリが作品ページで止まるので、アプリ本来の形（GTI）を渡してみる。
+         */
+        getAppId() { return null; }
+
+        onStateChange(cb) {
+            this._listeners.push(cb);
+            return () => {
+                this._listeners = this._listeners.filter(f => f !== cb);
+            };
+        }
+
+        /**
+         * 記録に残したい出来事（広告らしきものの出入りなど）を受け取る。
+         * 見分け方をまだ実機で確かめられていないサービスで、手がかりを集めるのに使う。
+         */
+        onDiag(cb) {
+            this._diagListeners.push(cb);
+            return () => {
+                this._diagListeners = this._diagListeners.filter(f => f !== cb);
+            };
+        }
+
+        /** @protected 派生クラスから記録を送る */
+        _reportDiag(event, extra = {}) {
+            let payload;
+            try { payload = { event, ...this.describeForDiag(), ...extra }; }
+            catch (e) { payload = { event, describeFailed: String(e && e.message) }; }
+            for (const cb of this._diagListeners) {
+                try { cb(payload); } catch (e) { console.error('[wp] diag listener error', e); }
+            }
+        }
+
+        /** @protected 派生クラスから状態変化を通知する */
+        _emit(type) {
+            const payload = { type, currentTime: this.getCurrentTime() };
+            for (const cb of this._listeners) {
+                try { cb(payload); } catch (e) { console.error('[wp] listener error', e); }
+            }
+        }
+
+        /**
+         * 条件が満たされるまで待つ。プレイヤーの生成待ちに使う。
+         * @param {() => any} probe 真値を返したら解決
+         * timeoutMs に Infinity を渡すと期限なしで待つ。
+         */
+        static waitFor(probe, { intervalMs = 300, timeoutMs = 60_000 } = {}) {
+            return new Promise((resolve, reject) => {
+                const started = Date.now();
+                const tick = () => {
+                    let value;
+                    try { value = probe(); } catch { value = null; }
+                    if (value) return resolve(value);
+                    if (Date.now() - started > timeoutMs) {
+                        return reject(new Error('waitFor timed out'));
+                    }
+                    setTimeout(tick, intervalMs);
+                };
+                tick();
+            });
+        }
+    }
+
+    globalThis.WPAdapters = globalThis.WPAdapters || { list: [] };
+    globalThis.WPAdapters.Base = ServiceAdapter;
+})();
+
+    // ---- extension/adapters/prime.js ----
+/**
+ * Prime Video アダプタ。
+ *
+ * Prime のプレイヤーは HTML5 <video> なので、要素を直接掴んで currentTime を読み書きできる
+ * （Netflix はこれが効かないため内部 API が要る）。
+ *
+ * 面倒な点は3つ。
+ *   1. 要素の特定。作品ページでは予告編が自動再生され、SPA 遷移で要素ごと差し替わり、
+ *      本編の長さは読み込みが進んでから確定するので、定期的に選び直す。
+ *   2. プレイヤーが <video> の外に自前の状態を持っていて、直接の操作と食い違う（下の ENFORCE）。
+ *   3. 広告が本編と同じ <video> に差し込まれる（下の「広告と本編の時間」）。
+ *
+ * このアダプタが外に見せる時間（getCurrentTime / seek）は、広告を除いた「本編の時間」。
+ */
+(() => {
+    const Base = globalThis.WPAdapters.Base;
+
+    // amazon.co.jp の作品 ID。ASIN（B で始まる10桁）のほか、再生を始めると
+    // 26桁前後の別形式（GTI）の URL に書き換えられる。途中で切らないよう区切りまで取る
+    const AMAZON_ID = /\/(?:dp|gp\/video\/detail)\/([A-Z0-9]{10}|[A-Z0-9]{20,40})(?=[/?#]|$)/;
+    const PRIMEVIDEO_ID = /primevideo\.com\/(?:region\/[a-z]{2}\/)?detail\/([A-Za-z0-9.]+)/;
+
+    // これより短い動画は予告編とみなして掴まない（秒）。
+    // 予告編は長くても数分。これを掴むとホストの予告編の再生が参加者に配られてしまう。
+    const MIN_MAIN_DURATION_SEC = 300;
+
+    const RESCAN_MS = 1000;
+
+    /*
+     * 実機で確認した挙動:
+     *   - シーク中は自分で一時停止し、終わると（seeked）自分の状態に従って再生を再開する。
+     *     → 「シーク → 一時停止」は、この再開で一時停止が打ち消される
+     *   - シーク中に play() されると、それを捨てて一時停止し、終わっても再開しない。
+     *     → 「シーク → 再生」は止まったままになる
+     * そこで play() / pause() は「こうなってほしい」という希望として持ち、シークが終わるのを
+     * 待って実際の状態を合わせ直す。一定時間たったら希望は捨てる（人が操作したときに邪魔しない）。
+     */
+    const ENFORCE_MS = 5000;
+    const ENFORCE_TICK_MS = 250;
+
+    /*
+     * 広告と本編の時間（実機の記録で確認）:
+     *   広告は本編と同じ <video> で流れ、その間も currentTime は進む。
+     *   例: 冒頭に64秒の広告 → currentTime 0〜64 が広告、64 から本編の 0:00 が始まる。
+     *   広告の長さ・回数は人によって違うので、currentTime のままでは合わせられない。
+     *
+     *   画面の経過時間表示は操作ボタンが出ている間しか DOM に無いので使えない。
+     *   代わりに「広告 1:04」のカウントダウンが出ている間に進んだ時間を自分で測って記録し、
+     *   本編の時間 = currentTime − それまでの広告の合計 として扱う。
+     *   ページを読み込み直すと <video> の時間は本編の時間から始め直しになる（広告の記録も捨てる）。
+     */
+    const AD_COUNTDOWN = /広告\s*\d{1,2}:\d{2}/;
+    const AD_TRACK_MS = 250;
+    // 1回の計測でこれ以上進んだら、広告の再生ではなくシークによる移動とみなす（秒）
+    const AD_JUMP_SEC = 1.5;
+    // これより短い「広告」は誤検知として捨てる（秒）
+    const AD_MIN_SEC = 1.0;
+
+    class PrimeAdapter extends Base {
+        static get service() { return 'prime'; }
+
+        static match(url) {
+            return /^https:\/\/(www\.amazon\.co\.jp|www\.primevideo\.com)\//.test(url);
+        }
+
+        constructor() {
+            super();
+            this._video = null;
+            this._detach = null;
+            this._rescanTimer = null;
+            this._want = null;          // 'play' | 'pause' | null
+            this._wantUntil = 0;
+            this._enforceTimer = null;
+            this._ads = [];             // 終わった広告 { elemStart, elemEnd, len, contentPos }
+            this._adOpen = null;        // 流れている広告 { elemStart, len, contentPos, lastElem }
+            this._adEl = null;          // 見つけたカウントダウン表示（毎回ページを探すと重いので覚える）
+            this._adTimer = null;
+        }
+
+        async ready() {
+            const video = await Base.waitFor(() => this._pickVideo(), { timeoutMs: Infinity });
+            this._bind(video);
+            this._watchForReplacement();
+            this._trackAds();
+            return this;
+        }
+
+        /**
+         * 本編の <video> を選ぶ。
+         * 予告編を掴まないよう、一定以上の長さのうち最も長いものを採用する。
+         */
+        _pickVideo() {
+            const usable = Array.from(document.querySelectorAll('video')).filter(v =>
+                v.isConnected &&
+                Number.isFinite(v.duration) &&
+                v.duration >= MIN_MAIN_DURATION_SEC
+            );
+            if (usable.length === 0) return null;
+
+            return usable.reduce((a, b) => (b.duration > a.duration ? b : a));
+        }
+
+        _bind(video) {
+            if (this._video === video) return;
+            if (this._detach) this._detach();
+
+            this._video = video;
+            // 別の <video> になったら時間の数え方も始め直し
+            this._ads = [];
+            this._adOpen = null;
+
+            const onPlay = () => {
+                // 止めてほしいのに始まった＝プレイヤーのシーク後の自動再開。止め直す
+                if (this._activeWant() === 'pause') return this._reconcile();
+                this._emit('play');
+            };
+            const onPause = () => {
+                // シーク中の一時停止はプレイヤーが勝手に行うもの。人の操作ではないので知らせない
+                // （知らせるとホストがシークするたびに全員が一瞬止まる）
+                if (video.seeking) return;
+                if (this._activeWant() === 'play') return this._reconcile();
+                this._emit('pause');
+            };
+            const onSeeked = () => {
+                this._reconcile();
+                this._emit('seek');
+            };
+
+            video.addEventListener('play', onPlay);
+            video.addEventListener('pause', onPause);
+            video.addEventListener('seeked', onSeeked);
+
+            this._detach = () => {
+                video.removeEventListener('play', onPlay);
+                video.removeEventListener('pause', onPause);
+                video.removeEventListener('seeked', onSeeked);
+            };
+
+            console.log('[wp] prime: bound to video', video.duration);
+        }
+
+        /**
+         * SPA 遷移で <video> が差し替わったら繋ぎ直す。
+         * 要素の追加だけでなく長さの確定でも選び直す必要があり、DOM の変化では
+         * 拾えないので定期的に見る（Amazon のページは DOM 変化が多く、
+         * MutationObserver だと毎回全 video を走査することになり重い）。
+         */
+        _watchForReplacement() {
+            if (this._rescanTimer) return;
+            this._rescanTimer = setInterval(() => {
+                const next = this._pickVideo();
+                if (next && next !== this._video) this._bind(next);
+            }, RESCAN_MS);
+        }
+
+        // --- 広告 -------------------------------------------------------------
+
+        /** 広告のカウントダウン表示（「広告 1:04」）を探す。見つからなければ null */
+        _adCountdown() {
+            const visible = (el) => el.getBoundingClientRect().width > 0;
+            const read = (el) => {
+                const m = el.textContent.match(AD_COUNTDOWN);
+                return m && visible(el) ? m[0].replace(/\s+/g, ' ') : null;
+            };
+
+            if (this._adEl && this._adEl.isConnected) {
+                const hit = read(this._adEl);
+                if (hit) return hit;
+            }
+            this._adEl = null;
+
+            // 「広告」だけが書かれた文字を探し、そこから少し上がって残り時間と一緒になる要素を取る。
+            // クラス名は難読化されていて変わるので使わない
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+                if (walker.currentNode.textContent.trim() !== '広告') continue;
+                let el = walker.currentNode.parentElement;
+                for (let i = 0; i < 3 && el; i++, el = el.parentElement) {
+                    if (el.textContent.length > 30) break;
+                    const hit = read(el);
+                    if (hit) { this._adEl = el; return hit; }
+                }
+            }
+            return null;
+        }
+
+        isInAd() {
+            const main = this._video;
+            if (!main) return false;
+            // プレイヤーが開いていないなら広告ではない
+            if (!this.isPlayerOpen()) return false;
+            return this._adCountdown() !== null;
+        }
+
+        isPlayerOpen() {
+            return Boolean(this._video) && this._video.getBoundingClientRect().width >= 50;
+        }
+
+        /** 広告の始まりと終わりを見張り、広告に使われた時間を記録する */
+        _trackAds() {
+            if (this._adTimer) return;
+            this._adTimer = setInterval(() => {
+                const v = this._video;
+                if (!v) return;
+                const elem = v.currentTime;
+                const inAd = this.isInAd();
+
+                if (inAd && !this._adOpen) {
+                    this._adOpen = { elemStart: elem, len: 0, contentPos: this._toContent(elem), lastElem: elem };
+                } else if (inAd && this._adOpen) {
+                    const step = elem - this._adOpen.lastElem;
+                    // 普通に流れた分だけ数える。シークによる移動は広告の長さに入れない
+                    if (step > 0 && step < AD_JUMP_SEC) this._adOpen.len += step;
+                    this._adOpen.lastElem = elem;
+                } else if (!inAd && this._adOpen) {
+                    const ad = { ...this._adOpen, elemEnd: elem };
+                    delete ad.lastElem;
+                    this._adOpen = null;
+                    // 同じ所の広告をもう一度通った（巻き戻して見直した等）なら二重に数えない
+                    const dup = this._ads.some(a => Math.abs(a.elemStart - ad.elemStart) < 2);
+                    if (ad.len >= AD_MIN_SEC && !dup) {
+                        this._ads.push(ad);
+                        this._ads.sort((a, b) => a.elemStart - b.elemStart);
+                    }
+                }
+            }, AD_TRACK_MS);
+        }
+
+        /** <video> の時間 → 本編の時間 */
+        _toContent(elem) {
+            let offset = 0;
+            for (const ad of this._ads) {
+                if (elem >= ad.elemEnd) offset += ad.len;
+                else if (elem >= ad.elemStart) return ad.contentPos;   // 広告の途中。本編は止まっている
+            }
+            if (this._adOpen && elem >= this._adOpen.elemStart) return this._adOpen.contentPos;
+            return Math.max(0, elem - offset);
+        }
+
+        /** 本編の時間 → <video> の時間（その位置より前の広告の分だけ後ろにずらす） */
+        _toElem(content) {
+            let offset = 0;
+            for (const ad of this._ads) {
+                if (ad.contentPos <= content) offset += ad.len;
+            }
+            return content + offset;
+        }
+
+        describeForDiag() {
+            const main = this._video;
+            return {
+                countdown: this._adCountdown(),
+                elemTime: main ? Math.round(main.currentTime * 10) / 10 : null,
+                contentTime: main ? Math.round(this.getCurrentTime() * 10) / 10 : null,
+                ads: this._ads.map(a => ({
+                    elemStart: Math.round(a.elemStart * 10) / 10,
+                    len: Math.round(a.len * 10) / 10,
+                    contentPos: Math.round(a.contentPos * 10) / 10
+                })),
+                videos: Array.from(document.querySelectorAll('video')).map(v => ({
+                    main: v === main,
+                    duration: Number.isFinite(v.duration) ? Math.round(v.duration) : String(v.duration),
+                    t: Math.round(v.currentTime * 10) / 10,
+                    paused: v.paused,
+                    visible: v.getBoundingClientRect().width > 50
+                }))
+            };
+        }
+
+        // --- 再生の状態 -------------------------------------------------------
+
+        getCurrentTime() {
+            return this._video ? this._toContent(this._video.currentTime) : 0;
+        }
+
+        getDuration() {
+            return this._video ? this._video.duration : NaN;
+        }
+
+        isPaused() {
+            return this._video ? this._video.paused : true;
+        }
+
+        play() {
+            if (!this._video) return;
+            this._request('play');
+            // シーク中でも一度は呼ぶ。止まったままのシークはこれをきっかけに進むため
+            this._playNow();
+        }
+
+        pause() {
+            if (!this._video) return;
+            this._request('pause');
+            this._video.pause();
+        }
+
+        _playNow() {
+            // Prime は再生開始を Promise で返す。自動再生拒否は握り潰さず記録する。
+            this._video?.play?.()?.catch(e => console.warn('[wp] play rejected', e));
+        }
+
+        releaseControl() {
+            this._want = null;
+            clearInterval(this._enforceTimer);
+        }
+
+        _activeWant() {
+            if (this._want && Date.now() > this._wantUntil) this._want = null;
+            return this._want;
+        }
+
+        _request(state) {
+            this._want = state;
+            this._wantUntil = Date.now() + ENFORCE_MS;
+            // イベントだけに頼らず、しばらく定期的にも確かめる（再開しないまま黙ることがあるため）
+            clearInterval(this._enforceTimer);
+            this._enforceTimer = setInterval(() => {
+                if (!this._activeWant()) return clearInterval(this._enforceTimer);
+                this._reconcile();
+            }, ENFORCE_TICK_MS);
+        }
+
+        /** 希望の状態と実際の状態が違えば合わせる。シーク中はプレイヤーが動かすので待つ */
+        _reconcile() {
+            const v = this._video;
+            const want = this._activeWant();
+            if (!v || !want || v.seeking) return;
+            if (this.isInAd()) return;   // 広告中は触らない（止めると広告も止まる）
+            if (want === 'play' && v.paused) this._playNow();
+            else if (want === 'pause' && !v.paused) v.pause();
+        }
+
+        /** 本編の時間で指定する */
+        seek(seconds) {
+            if (!this._video) return;
+            const duration = this._video.duration;
+            let target = this._toElem(Math.max(0, seconds));
+            if (Number.isFinite(duration) && duration > 0) {
+                target = Math.min(target, duration);
+            }
+            this._video.currentTime = target;
+        }
+
+        // --- 作品 -------------------------------------------------------------
+
+        getContentId(url = location.href) {
+            const amazon = url.match(AMAZON_ID);
+            if (amazon) return amazon[1];
+            const pv = url.match(PRIMEVIDEO_ID);
+            if (pv) return pv[1];
+            return null;
+        }
+
+        /**
+         * この作品本人の GTI（amzn1.dv.gti.<uuid>）。スマホの Prime Video アプリを開くのに使う。
+         *
+         * ASIN で開くとアプリは作品ページで止まり、時刻も無視された（2026-09-13 Android 実機）。
+         * GTI はアプリが本来受け付ける作品 ID なので、こちらで開けば再生まで行くか試す。
+         *
+         * 作品ページには GTI が20個ほど埋め込まれている（おすすめ欄の他作品を含む）。
+         * 本人のものは `"compactGTI":"…","gti":"amzn1.dv.gti.…"` のように **"gti" という名前**で入り、
+         * おすすめ欄の他作品は **"titleID"** という名前で並ぶ（2026-09-13 実ページで確認）。
+         * "gti" の名前のものだけを拾えば取り違えない。JSON が文字列の中にあるので \" の形も許す。
+         */
+        getAppId() {
+            const re = /\\?"gti\\?"\s*:\s*\\?"(amzn1\.dv\.gti\.[0-9a-f-]{36})/;
+            for (const s of document.scripts) {
+                const text = s.textContent;
+                if (!text || !text.includes('amzn1.dv.gti')) continue;
+                const m = text.match(re);
+                if (m) return m[1];
+            }
+            return null;
+        }
+
+        buildUrl(contentId) {
+            if (!contentId) return null;
+            // ASIN も GTI も amazon.co.jp の作品ページで開ける（GTI は実機の URL で確認）
+            if (location.hostname === 'www.amazon.co.jp' || /^B[A-Z0-9]{9}$/.test(contentId)) {
+                return `https://www.amazon.co.jp/gp/video/detail/${contentId}/?autoplay=1`;
+            }
+            return `https://www.primevideo.com/detail/${contentId}`;
+        }
+    }
+
+    globalThis.WPAdapters.list.push(PrimeAdapter);
+})();
+
+    // ---- extension/adapters/registry.js ----
+/**
+ * 現在の URL を担当するアダプタを選ぶ。
+ * adapters/*.js が globalThis.WPAdapters.list へ自己登録した順に評価する。
+ */
+(() => {
+    globalThis.WPAdapters.resolve = function resolve(url = location.href) {
+        const Adapter = globalThis.WPAdapters.list.find(A => A.match(url));
+        return Adapter ? new Adapter() : null;
+    };
+})();
+
+    // ---- extension/content/bridge.js ----
+/**
+ * MAIN world 側のスクリプト。
+ *
+ * ページと同じ実行文脈で動くため、サービスのプレイヤーへ直接触れる。
+ * 拡張機能 API は使えないので、ISOLATED world の ui.js とは
+ * window.postMessage 経由でやり取りする。
+ *
+ * 役割は2つあり、準備できる時期が違うので分けて扱う。
+ *   1. 作品の特定（URL から分かる。ページを開いた瞬間に送る）
+ *   2. プレイヤーの操作（<video> が現れるまで待つ。再生ボタンを押すまで現れないこともある）
+ */
+(() => {
+    // protocol.js はここでは読み込めない（理由は protocol.js の冒頭）ので、必要な定数を自前で持つ。
+    const WP = Object.freeze({
+        // window.postMessage の識別子。protocol.js と同じ値でなければならない
+        SRC_BRIDGE: 'wp-bridge',
+        SRC_UI: 'wp-ui',
+
+        // リモート適用中に自分のイベントを送り返さないための保護時間
+        ECHO_GUARD_MS: 700,
+
+        // これ以上ズレていたらシークして合わせる（秒）
+        SEEK_THRESHOLD_SEC: 1.0,
+
+        // ホストが再生中に現在位置を送る間隔。途中参加やズレの補正に使う
+        HEARTBEAT_MS: 5000,
+
+        // 定期補正でシークするズレの下限（秒）。小さいとシークのたびに読み込みが挟まる
+        DRIFT_THRESHOLD_SEC: 2.0,
+
+        // 一時停止時、この秒数以内の遅れなら再生を続けて追いつく。それ以上はシークで合わせる
+        FOLLOW_MAX_GAP_SEC: 3.0,
+
+        // 追いつき待ちの期限。遅れは最大 FOLLOW_MAX_GAP_SEC 秒なので、本来は数秒で終わる。
+        // これを過ぎても届かないなら、再生が止まっている（読み込み・サービス側の制限など）。
+        // 待ち続けると定期補正が捨てられ続け、ゲストがずれたまま固まる（2026-09-12 の不具合）
+        FOLLOW_TIMEOUT_MS: 5000,
+
+        // プレイヤーが開いた直後は「止まって待つ」を後回しにする。冒頭の広告は開いた直後に
+        // 始まるが、広告の表示が出るまで少しかかる。その間に止めると広告ごと止まってしまう。
+        // 自分の動画がこれだけ進むか、広告が見つかるか、最長時間が過ぎるまで待つ
+        STARTUP_PLAY_MS: 3000,
+        STARTUP_MAX_MS: 15000,
+
+        // サービス側の確認ダイアログ（Netflix の「まだ見ていますか？」）を見に行く間隔
+        INTERRUPT_CHECK_MS: 2000
+    });
+    const isTop = window.top === window;
+
+    let adapter = null;
+    let bound = false;           // プレイヤーを掴めたか
+    let applying = false;        // リモート適用中フラグ（自分のイベントを送り返さないため）
+    let applyTimer = null;
+    let targetPauseTime = null;  // 追従停止の目標位置
+    let followTimer = null;
+    let selfAd = false;          // 自分が広告を見ているか
+    let hostAd = false;          // ホストが広告を見ているか（ホストの定期通知で知る）
+    let hostPaused = false;      // ホストが止まっているか（表示用）
+    let startup = false;         // プレイヤーが開いた直後か（STARTUP_*）
+    let deferredStop = false;    // 開いた直後に「止まって待つ」を後回しにしたか
+    let isHost = false;          // ui.js から教わる（このスクリプトは拡張機能の状態を直接見られない）
+    let lastTickDropReport = 0;  // 調査用（follow から抜けられない件）。記録の間引きに使う
+
+    function post(type, payload) {
+        window.postMessage({ source: WP.SRC_BRIDGE, type, payload }, location.origin);
+    }
+
+    /** リモート操作を適用する間だけイベント送出を止める */
+    function withEchoGuard(fn) {
+        applying = true;
+        clearTimeout(applyTimer);
+        try { fn(); } finally {
+            applyTimer = setTimeout(() => { applying = false; }, WP.ECHO_GUARD_MS);
+        }
+    }
+
+    function stopFollowing() {
+        targetPauseTime = null;
+        clearInterval(followTimer);
+    }
+
+    /**
+     * ホストが止めた位置まで自分は再生を続けてから止まる。
+     * 通信遅延で自分のほうが手前にいる場合、その場で止めると位置がズレるため。
+     *
+     * **必ず期限を設けること**（2026-09-12 の不具合）。追いつく前にゲストの再生が止まると
+     * 目標に永遠に届かず、その間 `tick`（定期補正）が全部捨てられてゲストがずれたまま固まる。
+     * 再生が止まる場面は珍しくない（読み込み、Netflix の同時視聴の制限など。
+     * 実機テストで「ホスト再生中にゲストが30秒間に3回止まる」を観測している）。
+     * 再現は `tools/repro-follow-stuck.js`。
+     *
+     * 様子は diag.log に残している（follow-start / follow-wait / follow-done / follow-timeout）。
+     */
+    function followUntil(time) {
+        targetPauseTime = time;
+        clearInterval(followTimer);
+
+        const startedAt = Date.now();
+        const startT = adapter.getCurrentTime();
+        let deadline = startedAt + WP.FOLLOW_TIMEOUT_MS;
+        let lastReport = 0;
+        post('DIAG', {
+            event: 'follow-start', url: location.href,
+            target: time, now: startT, gap: time - startT,
+            paused: adapter.isPaused(), inAd: adapter.isInAd()
+        });
+
+        followTimer = setInterval(() => {
+            if (targetPauseTime === null) return clearInterval(followTimer);
+            const elapsed = Date.now() - startedAt;
+            const t = adapter.getCurrentTime();
+
+            // 追いつけていない間の様子を1秒ごとに残す（再生位置が進んでいるかが要点）
+            if (elapsed - lastReport >= 1000) {
+                lastReport = elapsed;
+                post('DIAG', {
+                    event: 'follow-wait', url: location.href,
+                    target: targetPauseTime, now: t, startT, elapsedMs: elapsed,
+                    advanced: t - startT, paused: adapter.isPaused(), inAd: adapter.isInAd()
+                });
+            }
+
+            // 広告中は本編が進まない。止めると広告ごと止まるので、待つ時間にも数えない
+            if (adapter.isInAd()) {
+                deadline = Date.now() + WP.FOLLOW_TIMEOUT_MS;
+                return;
+            }
+
+            if (t >= targetPauseTime) {
+                withEchoGuard(() => adapter.pause());
+                post('DIAG', {
+                    event: 'follow-done', url: location.href,
+                    target: targetPauseTime, now: t, elapsedMs: elapsed
+                });
+                stopFollowing();
+                return;
+            }
+
+            // 期限切れ。再生が止まっていて追いつけない。
+            // ここで諦めないと、以降の定期補正が捨てられ続けてずれたまま固まる
+            if (Date.now() > deadline) {
+                const target = targetPauseTime;
+                post('DIAG', {
+                    event: 'follow-timeout', url: location.href,
+                    target, now: t, startT, elapsedMs: elapsed,
+                    advanced: t - startT, paused: adapter.isPaused()
+                });
+                stopFollowing();
+                withEchoGuard(() => {
+                    adapter.seek(target);
+                    adapter.pause();
+                });
+            }
+        }, 100);
+    }
+
+    function apply({ type, currentTime, timestamp, paused, ad } = {}) {
+        if (!bound) return;
+        if (typeof currentTime !== 'number' || !Number.isFinite(currentTime)) return;
+
+        // ホストが広告中かは定期通知で分かる。広告中のホストは操作を送らないので、
+        // 操作が届いたなら広告は終わっている
+        setHostState({
+            hostAd: type === 'tick' ? Boolean(ad) : false,
+            hostPaused: type === 'pause' || (type === 'tick' ? Boolean(paused) : hostPaused && type !== 'play')
+        });
+
+        // 自分が広告中なら何もしない。本編を動かすと広告が止まってしまう。
+        // 広告が終わった時点でホストの位置を取り直す（watchAds）
+        if (adapter.isInAd()) return;
+
+        // 開いた直後は「止まって待つ」を後回しにする（冒頭の広告を止めないため）
+        const stops = type === 'pause' || (type === 'tick' && (paused || ad));
+        if (startup) {
+            if (stops) { deferredStop = true; return; }
+            endStartup();   // ホストが再生中と分かったので、待つ理由がない
+        }
+
+        // 送信からの経過時間を足して、いま居るべき位置を求める
+        const lag = timestamp ? Math.max(0, (Date.now() - timestamp) / 1000) : 0;
+
+        if (type === 'play') {
+            stopFollowing();
+            const target = currentTime + lag;
+            withEchoGuard(() => {
+                if (Math.abs(adapter.getCurrentTime() - target) > WP.SEEK_THRESHOLD_SEC) {
+                    adapter.seek(target);
+                }
+                adapter.play();
+            });
+        } else if (type === 'pause') {
+            const gap = currentTime - adapter.getCurrentTime();
+            if (gap > 0.2 && gap <= WP.FOLLOW_MAX_GAP_SEC && !adapter.isPaused()) {
+                followUntil(currentTime);   // 少し手前 → 追いついてから止める
+            } else {
+                stopFollowing();
+                withEchoGuard(() => {
+                    adapter.seek(currentTime);
+                    adapter.pause();
+                });
+            }
+        } else if (type === 'seek') {
+            stopFollowing();
+            withEchoGuard(() => {
+                // サービスによってはシーク後に勝手に再生を再開する（Prime がそう）。止まっていたなら止め直す
+                const wasPaused = adapter.isPaused();
+                adapter.seek(currentTime);
+                if (wasPaused) adapter.pause();
+            });
+        } else if (type === 'tick') {
+            // ホストの状態の定期通知。大きくズレていれば合わせる。
+            if (targetPauseTime !== null) {
+                // 追いつき待ちの間は補正しない。ここを通り続けているなら、
+                // 追いつき待ちから抜けられていない（調査中・2026-09-12）
+                if (Date.now() - lastTickDropReport >= 3000) {
+                    lastTickDropReport = Date.now();
+                    post('DIAG', {
+                        event: 'tick-dropped', url: location.href,
+                        target: targetPauseTime, now: adapter.getCurrentTime(),
+                        hostTime: currentTime, hostPaused: Boolean(paused), hostAd: Boolean(ad),
+                        paused: adapter.isPaused(), inAd: adapter.isInAd()
+                    });
+                }
+                return;
+            }
+            if (paused || ad) {
+                // ホストは止まっている、または広告中（本編は進まない）→ 同じ位置で止まって待つ
+                withEchoGuard(() => {
+                    const drifted = Math.abs(adapter.getCurrentTime() - currentTime) > WP.DRIFT_THRESHOLD_SEC;
+                    if (drifted) adapter.seek(currentTime);
+                    // シーク後の自動再開に備え、シークしたときは止まっていても止め直す
+                    if (drifted || !adapter.isPaused()) adapter.pause();
+                });
+                return;
+            }
+            const target = currentTime + lag;
+            withEchoGuard(() => {
+                if (Math.abs(adapter.getCurrentTime() - target) > WP.DRIFT_THRESHOLD_SEC) {
+                    adapter.seek(target);
+                }
+                if (adapter.isPaused()) adapter.play();
+            });
+        }
+    }
+
+    window.addEventListener('message', (ev) => {
+        if (ev.source !== window) return;
+        const data = ev.data;
+        if (!data || data.source !== WP.SRC_UI) return;
+
+        if (data.type === 'APPLY') {
+            apply(data.payload);
+        } else if (data.type === 'ROLE') {
+            const becameHost = !isHost && Boolean(data.payload && data.payload.isHost);
+            isHost = Boolean(data.payload && data.payload.isHost);
+            if (becameHost && adapter) {
+                // ゲストとして止めた直後だと、ホストとして押した再生が「勝手な再開」とみなされ
+                // 止め直されてしまう（テストで発生）。合わせ込みの途中の状態を全部やめる
+                adapter.releaseControl();
+                stopFollowing();
+                startup = false;
+                deferredStop = false;
+            }
+        } else if (data.type === 'REQUEST_INFO') {
+            sendInfo();
+        }
+    });
+
+    function pageInfo() {
+        const contentId = adapter.getContentId(location.href);
+        return {
+            service: adapter.constructor.service,
+            contentId,
+            // 参加者を飛ばす先。サービス側の余計なパラメータを除いた形にする
+            url: (contentId && adapter.buildUrl(contentId)) || location.href
+        };
+    }
+
+    /** 作品情報を送る。最上位フレームだけ（広告などの iframe が上書きしないように） */
+    function sendInfo() {
+        if (!adapter || !isTop) return;
+        const info = pageInfo();
+        post('INFO', info);
+        lookForAppId(info.contentId);
+    }
+
+    /**
+     * スマホのアプリを開くための内部 ID（Prime の GTI）を探して、見つかったら別便で送る。
+     *
+     * INFO（作品情報）に混ぜないのは、作品情報を送り直すとサーバー側の再生位置が 0 に戻るため
+     * （同じ作品の change-video は位置を初期化する）。ページの埋め込み情報は読み込みの途中で
+     * 入ることがあるので、しばらく探し続ける。
+     */
+    let appIdTimer = null;
+    function lookForAppId(contentId) {
+        clearInterval(appIdTimer);
+        if (!contentId || typeof adapter.getAppId !== 'function') return;
+        let tries = 0;
+        const probe = () => {
+            // 探している間に別の作品へ移っていたらやめる
+            if (adapter.getContentId(location.href) !== contentId) return clearInterval(appIdTimer);
+            let appId = null;
+            try { appId = adapter.getAppId(); } catch { /* ページの作りが変わった */ }
+            if (appId) {
+                clearInterval(appIdTimer);
+                post('META', { contentId, appId });
+            } else if (++tries >= 20) {
+                clearInterval(appIdTimer);
+            }
+        };
+        appIdTimer = setInterval(probe, 1000);
+        probe();
+    }
+
+    /**
+     * SPA 遷移では content script が再実行されないので、URL の変化を自前で見張る。
+     * ただしサービスによっては、URL が変わっても作品は変わっていない。Prime は再生を始めると
+     * 同じ作品の URL を別形式（ASIN → GTI）に書き換える。これを切り替えと取ると、
+     * ゲストのページを開き直させてしまい、広告の入り方が変わって位置がずれる（実機で発生）。
+     * どちらなのかはアダプタが決める（Netflix の URL 変化は本当に別の話数）。
+     */
+    function watchUrl() {
+        let last = location.href;
+        setInterval(() => {
+            if (location.href === last) return;
+            last = location.href;
+            if (bound && adapter.ignoreUrlChange()) return;
+            sendInfo();
+        }, 500);
+    }
+
+    /**
+     * ホストの再生位置と再生/停止を定期的に知らせる（ゲスト側で送っても background が捨てる）。
+     * 停止中も送る。Amazon は作品ページを開いた時点で本編を「続きの位置で停止」の状態で
+     * 用意しており、この初期状態ではイベントが一切出ないため、送らないとゲストが知る手段がない。
+     */
+    function beat() {
+        if (!bound || applying) return;
+        post('PLAYER_EVENT', {
+            type: 'tick',
+            currentTime: adapter.getCurrentTime(),
+            paused: adapter.isPaused(),
+            // 広告中は本編が止まっているので、ゲストは止まって待つことになる。表示用に伝える
+            ad: adapter.isInAd(),
+            timestamp: Date.now()
+        });
+    }
+
+    function startHeartbeat() {
+        beat();   // プレイヤーを掴んだ時点の状態をすぐ知らせる
+        setInterval(beat, WP.HEARTBEAT_MS);
+    }
+
+    function postStatus() {
+        post('STATUS', { selfAd, hostAd, hostPaused });
+    }
+
+    function setHostState(next) {
+        if (next.hostAd === hostAd && next.hostPaused === hostPaused) return;
+        hostAd = next.hostAd;
+        hostPaused = next.hostPaused;
+        postStatus();
+    }
+
+    /** プレイヤーが開いた直後の猶予（STARTUP_*）を始める */
+    function beginStartup() {
+        startup = true;
+        deferredStop = false;
+        const began = Date.now();
+        let played = 0;
+        let last = began;
+        const timer = setInterval(() => {
+            if (!startup) return clearInterval(timer);
+            const now = Date.now();
+            if (!adapter.isPaused()) played += now - last;
+            last = now;
+            if (adapter.isInAd() || played >= WP.STARTUP_PLAY_MS || now - began >= WP.STARTUP_MAX_MS) {
+                endStartup();
+            }
+        }, 250);
+    }
+
+    function endStartup() {
+        if (!startup) return;
+        startup = false;
+        // 後回しにした「止まって待つ」をやり直す。広告中なら広告明けに watchAds がやる
+        if (deferredStop && !adapter.isInAd()) post('READY', pageInfo());
+        deferredStop = false;
+    }
+
+    /**
+     * 自分の広告の始まりと終わりを見張る。
+     * 終わったらホストの今の位置を取り直す（広告中はホストからの操作を無視しているため）。
+     * 広告の見分け方はまだ実際の広告で確かめきれていないので、出入りのたびに様子を記録して送る。
+     */
+    function watchAds() {
+        setInterval(() => {
+            const now = adapter.isInAd();
+            // ゲストの広告は最後まで流す。広告が始まる直前に「ホストに合わせて止まる」が
+            // 当たると広告ごと止まり、広告中はこちらから手を出さないので止まったままになる（実機で発生）
+            if (now && !isHost && adapter.isPaused()) adapter.play();
+            if (now === selfAd) return;
+            selfAd = now;
+            postStatus();
+            post('DIAG', { event: now ? 'ad-start' : 'ad-end', url: location.href, ...adapter.describeForDiag() });
+            // ホストなら、広告の出入りをすぐ知らせる（ゲストが待ち始める／再生を再開する）。
+            // 広告中も <video> は止まらないので、play/pause のイベントは出ない
+            beat();
+            if (!now) post('READY', pageInfo());   // ゲストなら、background がホストの位置を取りに行く
+        }, 500);
+    }
+
+    /**
+     * サービス側の確認ダイアログ（Netflix の「まだ見ていますか？」）を進める。
+     * ホストが止まると全員が止まるので、ホストのときだけ。ゲストの画面は本人が押す
+     * （ユーザーの判断。見ていない人の再生まで勝手に続けない）。
+     */
+    function watchInterruptions() {
+        setInterval(() => {
+            if (!bound || !isHost) return;
+            try { adapter.dismissInterruption(); } catch (e) { console.warn('[wp] dismiss failed', e); }
+        }, WP.INTERRUPT_CHECK_MS);
+    }
+
+    async function start() {
+        adapter = globalThis.WPAdapters.resolve(location.href);
+        if (!adapter) return;
+
+        // 作品の特定はプレイヤーを待たずに済ませる
+        sendInfo();
+        if (isTop) watchUrl();
+
+        // 再生ボタンを押すまでプレイヤーが現れないことがあるので、期限なしで待つ
+        await adapter.ready();
+        bound = true;
+        beginStartup();
+
+        adapter.onStateChange((evt) => {
+            if (applying) return;   // リモート適用によるイベントは送り返さない
+            // 広告中の操作（シークバーを動かす等）は送らない。送るとゲストの広告が止まる。
+            // 広告明けに本編が動き出したときの play で、ゲストはその位置に合わせられる
+            if (adapter.isInAd()) return;
+            post('PLAYER_EVENT', { ...evt, timestamp: Date.now() });
+        });
+        // アダプタが自分で見つけた「記録しておきたいこと」（Netflix の広告の手がかりなど）
+        adapter.onDiag((payload) => post('DIAG', { url: location.href, ...payload }));
+
+        startHeartbeat();
+        watchAds();
+        watchInterruptions();
+
+        post('READY', pageInfo());
+        console.log('[wp] bridge ready:', adapter.constructor.service);
+    }
+
+    start().catch(e => console.warn('[wp] bridge failed:', e));
+})();
+
+})();
