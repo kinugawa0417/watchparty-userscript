@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.16.0
+// @version      0.16.1
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -16,7 +16,7 @@
     'use strict';
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.16.0";
+    const __WP_VERSION__ = "0.16.1";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -104,6 +104,32 @@ const WP_US = (() => {
 
     const enc = encodeURIComponent;
 
+    // スクリプトの版（0.16.0 の形）と公開日（2026-09-14 の形）
+    const VERSION_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+    const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+    /** 版 a が版 b より古いか（形が違えば false） */
+    function olderVersion(a, b) {
+        if (!VERSION_RE.test(a) || !VERSION_RE.test(b)) return false;
+        const x = a.split('.').map(Number), y = b.split('.').map(Number);
+        for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i];
+        return false;
+    }
+
+    /** 2026-09-14 → 9月14日（形が違えば空） */
+    function dateLabel(d) {
+        const m = DATE_RE.exec(String(d || ''));
+        return m ? `${Number(m[2])}月${Number(m[3])}日` : '';
+    }
+
+    /**
+     * 最新のスクリプトの版と公開日を、Amazon のページで動くスクリプトに伝える指定（&wpv=&wpd=）。
+     * スクリプトは自分の版と比べて、古ければ「スクリプトが更新されました」と出す（2026-09-14）
+     */
+    function scriptQuery(s) {
+        return s && VERSION_RE.test(s.version) && DATE_RE.test(s.date) ? `&wpv=${s.version}&wpd=${s.date}` : '';
+    }
+
     /*
      * 開くアドレスは、ここに書いた形でしか作らない。
      * v は cleanVideo() を通したもの、t は整数の秒。
@@ -128,10 +154,10 @@ const WP_US = (() => {
          * 入るルームとなまえを知るため（Amazon は知らない指定を無視する）。
          * 時刻の指定は Web プレイヤーも無視するので付けない。合わせるのはスクリプトの仕事。
          */
-        primeWeb(v, room, name, android) {
+        primeWeb(v, room, name, android, script) {
             if (v.service !== 'prime') return null;
             const path = `www.amazon.co.jp/gp/video/detail/${enc(v.contentId)}/` +
-                `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}`;
+                `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
             /*
              * Android は **Firefox で開く**（2026-09-14）。Chrome は拡張機能が使えず、自動で合わせるスクリプトが動かない。
              * Firefox なら Violentmonkey で同じスクリプトが動く。intent:// でアプリを指定し、
@@ -145,10 +171,10 @@ const WP_US = (() => {
          * amazon.co.jp にはログインできないので、こちらで開く。作品 ID は国をまたいで同じ作品を指す GTI があればそれ、
          * 無ければ ASIN（primevideo.com/detail/<ASIN>/ でも同じ作品が開くことを確認済み）。
          */
-        primeVideoWeb(v, room, name, android) {
+        primeVideoWeb(v, room, name, android, script) {
             if (v.service !== 'prime') return null;
             const path = `www.primevideo.com/detail/${enc(v.appId || v.contentId)}/` +
-                `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}`;
+                `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
             return android ? urls.firefox(`https://${path}`) : `https://${path}`;
         },
 
@@ -230,7 +256,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, cleanVideo, cleanSec, cleanRoom, hhmmss, urls, safeColor, isReaction, messageRow, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
+    return { SERVER, cleanVideo, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -279,7 +305,10 @@ const WP_SHIM = (() => {
             const v = {
                 room,
                 name: (q.get('wpn') || '').slice(0, 20) || 'スマホ',
-                contentId: id ? id[1] : null
+                contentId: id ? id[1] : null,
+                // 友達の画面に入っている最新のスクリプトの版と公開日（古ければ「更新されました」を出す）
+                latest: WP_US.VERSION_RE.test(q.get('wpv') || '') ? q.get('wpv') : null,
+                latestDate: WP_US.DATE_RE.test(q.get('wpd') || '') ? q.get('wpd') : null
             };
             try { sessionStorage.setItem(KEY, JSON.stringify(v)); } catch { /* 使えない設定 */ }
             return v;
@@ -290,7 +319,9 @@ const WP_SHIM = (() => {
                 return {
                     room: WP_US.cleanRoom(saved.room),
                     name: String(saved.name || 'スマホ').slice(0, 20),
-                    contentId: typeof saved.contentId === 'string' ? saved.contentId : null
+                    contentId: typeof saved.contentId === 'string' ? saved.contentId : null,
+                    latest: WP_US.VERSION_RE.test(saved.latest || '') ? saved.latest : null,
+                    latestDate: WP_US.DATE_RE.test(saved.latestDate || '') ? saved.latestDate : null
                 };
             }
         } catch { /* 壊れていたら無視 */ }
@@ -311,6 +342,8 @@ const WP_SHIM = (() => {
         let otherVideo = null;
         /** ホストの作品が変わって、まだ送られていない（2026-09-14）。送られるまで合わせない */
         let hostHold = false;
+        /** 動画（プレイヤー）を掴めたか。掴めるまでは「自動で合わせています」と出さない（Netflix のエラー画面でも出ていた） */
+        let playerReady = false;
 
         /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
         function sameTitle(v) {
@@ -327,7 +360,9 @@ const WP_SHIM = (() => {
             connected = true;
             me = socket.id;
             // player … 友達の画面とは別の、再生タブとしての接続。参加者一覧には出ない
-            socket.emit('join-room', { roomId: target.room, username: target.name, viewer: true, player: true });
+            // scriptVersion … このスクリプトの版。同じなまえの友達の画面が、古ければ「更新されました」を出す
+            socket.emit('join-room', { roomId: target.room, username: target.name, viewer: true, player: true,
+                scriptVersion: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '' });
             toBridge('ROLE', { isHost: false });
             render();
         });
@@ -404,7 +439,9 @@ const WP_SHIM = (() => {
             const d = ev.data;
             if (!d || d.source !== SRC_BRIDGE) return;
             if (d.type === 'READY') {
+                playerReady = true;
                 if (connected) socket.emit('request-sync');
+                render();
             } else if (d.type === 'STATUS') {
                 selfAd = Boolean(d.payload && d.payload.selfAd);
                 hostAd = Boolean(d.payload && d.payload.hostAd);
@@ -442,6 +479,9 @@ const WP_SHIM = (() => {
                        font: 700 16px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
                        background: #3a6df0; border-radius: 10px; padding: 12px 16px; }
                 .other { background: #1f8a5a; max-width: 100%; }
+                .update { pointer-events: auto; border: 0; text-align: left; max-width: 100%;
+                          font: 600 14px/1.5 -apple-system, system-ui, sans-serif; color: #1a1300;
+                          background: #ffcc33; border-radius: 10px; padding: 10px 12px; }
                 .fab { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
                        pointer-events: auto; border: 0; border-radius: 999px; min-width: 56px; min-height: 48px;
                        padding: 10px 16px; font: 700 16px/1 -apple-system, system-ui, sans-serif;
@@ -474,6 +514,7 @@ const WP_SHIM = (() => {
                 <div class="pill"><span class="dot"></span><span class="text">Watch Party</span></div>
             </div>
             <div class="top">
+                <button class="update" hidden></button>
                 <button class="tap" hidden>▶ タップして再開</button>
                 <a class="other" hidden></a>
             </div>
@@ -490,6 +531,20 @@ const WP_SHIM = (() => {
         }
         const q = (s) => root.querySelector(s);
         q('.ver').textContent = typeof __WP_VERSION__ === 'string' ? 'v' + __WP_VERSION__ : '';
+
+        /*
+         * 「スクリプトが更新されました」（2026-09-14 ユーザー要望）。友達の画面が付けた最新の版（&wpv=）より
+         * このスクリプトが古ければ出す。スクリプトは自動で更新されない（@updateURL を使わない）ので、入れ直してもらう。
+         * インストール先のリンクはここには出さない（アドレスの指定は誰でも作れるので、リンクは友達の画面のものだけを使う）。
+         * 押すと閉じる。
+         */
+        if (target.latest && U.olderVersion(typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '0.0.0', target.latest)) {
+            const day = U.dateLabel(target.latestDate);
+            q('.update').textContent = `🔄 スクリプトが更新されました${day ? `（${day}）` : ''}。` +
+                '招待のページに戻り「スクリプトをインストールし直す」を押してください（押すと閉じます）';
+            q('.update').hidden = false;
+            q('.update').addEventListener('click', () => { q('.update').hidden = true; });
+        }
 
         // --- チャット -----------------------------------------------------------
         let open = false;
@@ -574,12 +629,14 @@ const WP_SHIM = (() => {
          * 広告の表示の記録（2026-09-14）。iPhone の Safari で、ゲストの広告の時間まで本編の時間に数えてずれた。
          * PC で確かめた「広告 1:04」の見分け方がスマホ用の画面で効いていないとみて、実際の表示を集める。
          * 送るのは「広告」「Ad」「スキップ」「スポンサー」を含む短い文字（プレイヤーの表示）と、再生位置の数だけ。
-         * 表示が変わったときだけ、1ページ30回まで。
+         * 表示が変わったときと開いてから5分は15秒ごと、1ページ50回まで。
          */
         let adReports = 0;
         let lastAdKey = '';
+        let lastAdAt = 0;
+        const openedAt = Date.now();
         function reportAds() {
-            if (!connected || PAGE_SERVICE !== 'prime' || adReports >= 30) return;
+            if (!connected || PAGE_SERVICE !== 'prime' || adReports >= 50) return;
             const vids = Array.from(document.querySelectorAll('video')).filter(v => Number.isFinite(v.duration) && v.duration >= 300);
             if (!vids.length) return;
             const v = vids.reduce((a, b) => (b.duration > a.duration ? b : a));
@@ -587,7 +644,8 @@ const WP_SHIM = (() => {
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
             while (walker.nextNode() && texts.length < 6) {
                 const s = walker.currentNode.textContent.trim();
-                if (!s || s.length > 40 || !/広告|スキップ|スポンサー|^Ads?\b/.test(s)) continue;
+                // 「広告」の文字が無く、残り時間（0:15）だけのこともあり得るので、時刻だけの文字も拾う
+                if (!s || s.length > 40 || !/広告|スキップ|スポンサー|^Ads?\b|^\d{1,2}:\d{2}(:\d{2})?$/.test(s)) continue;
                 const el = walker.currentNode.parentElement;
                 if (!el) continue;
                 // 映像に重なっている表示だけ（ページ下の「広告掲載」などは関係ない）
@@ -599,7 +657,10 @@ const WP_SHIM = (() => {
                 texts.push({ s, around: up.textContent.replace(/\s+/g, ' ').trim().slice(0, 60) });
             }
             const key = JSON.stringify(texts) + selfAd;
-            if (key === lastAdKey) return;
+            // 表示が変わったとき。加えて開いてから5分は15秒ごとにも送る（広告の間に時間がどう進んだかを見るため）
+            const periodic = Date.now() - openedAt < 5 * 60 * 1000 && Date.now() - lastAdAt >= 15000;
+            if (key === lastAdKey && !periodic) return;
+            lastAdAt = Date.now();
             lastAdKey = key;
             adReports++;
             socket.emit('ad-report', {
@@ -666,6 +727,7 @@ const WP_SHIM = (() => {
                 : otherVideo ? 'ホストが別の作品に変えました'
                 : selfAd ? '広告のあと、ホストに合わせます'
                 : hostAd ? 'ホストの広告が終わるのを待っています'
+                : !playerReady ? '動画が始まるのを待っています'
                 : 'ホストに自動で合わせています';
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
