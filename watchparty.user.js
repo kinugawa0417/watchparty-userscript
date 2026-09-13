@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.12.3
+// @version      0.13.0
 // @description  友達と一緒に Prime Video を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @noframes
@@ -365,7 +365,9 @@ const WP_SHIM = (() => {
                 .close { border: 0; border-radius: 8px; background: #3a3a46; color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; }
                 .msgs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
                         font-size: 14px; line-height: 1.5; overscroll-behavior: contain; }
-                .msg { word-break: break-word; }
+                /* 新しい発言を一番下に出す。少ないうちも下から積み上げる（LINE と同じ） */
+                .msgs > :first-child { margin-top: auto; }
+                .msg { word-break: break-word; flex: none; }
                 .msg .name { font-weight: 700; margin-right: 6px; }
                 .msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
                 .msg.system { color: #9a9aa6; font-size: 12px; text-align: center; }
