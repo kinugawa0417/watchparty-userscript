@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.14.0
-// @description  友達と一緒に Prime Video を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
+// @version      0.15.0
+// @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
+// @match        https://www.netflix.com/*
 // @noframes
 // @run-at       document-idle
 // @inject-into  page
@@ -15,7 +16,7 @@
     'use strict';
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.14.0";
+    const __WP_VERSION__ = "0.15.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -152,6 +153,18 @@ const WP_US = (() => {
         },
 
         /**
+         * （試験・2026-09-14）Netflix をブラウザで開く形。Prime と同じく、そのページの中で Prime/Netflix 用スクリプトが
+         * チャットを出してホストに自動で合わせる。時刻は付けない（合わせるのはスクリプトの仕事）。
+         * ログインしていないと Netflix は別のページへ回し、そのとき ?wp= は消える。# の後ろは回されても残るので両方に付ける。
+         */
+        netflixWeb(v, room, name, android) {
+            if (v.service !== 'netflix') return null;
+            const q = `wp=${enc(room)}&wpn=${enc(name)}`;
+            const path = `www.netflix.com/watch/${enc(v.contentId)}?${q}#${q}`;
+            return android ? urls.firefox(`https://${path}`) : `https://${path}`;
+        },
+
+        /**
          * Android で、決まったアドレスを Firefox で開く形（intent://）。
          * href は https:// で始まる、このファイルで組み立てた決まったアドレスだけを渡すこと。
          */
@@ -222,7 +235,8 @@ const WP_US = (() => {
 
 
     // amazon.co.jp と、Prime Video だけ契約の人の primevideo.com
-    if (location.hostname !== 'www.amazon.co.jp' && location.hostname !== 'www.primevideo.com') return;
+    // Netflix は試験（2026-09-14）。@name は変えないこと（Userscripts が別のスクリプトとして二重に入れてしまう）
+    if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
 
     // ---- userscript/shim.js ----
 /**
@@ -250,12 +264,18 @@ const WP_SHIM = (() => {
     const AMAZON_DETAIL = /\/(?:gp\/video\/)?detail\/([A-Za-z0-9.-]{10,80})(?=[/?#]|$)/;
     const SYNC_TYPES = new Set(['play', 'pause', 'seek', 'tick']);
 
+    // このページのサービス。Netflix（試験・2026-09-14）と Prime（amazon.co.jp / primevideo.com）
+    const PAGE_SERVICE = location.hostname === 'www.netflix.com' ? 'netflix' : 'prime';
+    const NETFLIX_WATCH = /\/watch\/(\d{4,12})(?=[/?#]|$)/;
+
     /** このタブが見るルーム。無ければ null（何もしない） */
     function readRoom() {
-        const q = new URLSearchParams(location.search);
+        // ?wp= が無ければ # の後ろも見る（Netflix はログイン画面などへ回すと ?wp= を消すが、# の後ろは残る）
+        let q = new URLSearchParams(location.search);
+        if (!q.get('wp') && location.hash.length > 1) q = new URLSearchParams(location.hash.slice(1));
         const room = WP_US.cleanRoom(q.get('wp'));
         if (room) {
-            const id = AMAZON_DETAIL.exec(location.pathname);
+            const id = (PAGE_SERVICE === 'netflix' ? NETFLIX_WATCH : AMAZON_DETAIL).exec(location.pathname);
             const v = {
                 room,
                 name: (q.get('wpn') || '').slice(0, 20) || 'スマホ',
@@ -292,7 +312,7 @@ const WP_SHIM = (() => {
 
         /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
         function sameTitle(v) {
-            if (v.service !== 'prime') return false;
+            if (v.service !== PAGE_SERVICE) return false;
             if (!target.contentId) return true;   // このページの作品が分からないときは止めない
             // primevideo.com では GTI（Amazon 内部の作品 ID）で開くので、ホストの GTI とも比べる
             return v.contentId === target.contentId || (Boolean(v.appId) && v.appId === target.contentId);
@@ -394,8 +414,16 @@ const WP_SHIM = (() => {
             <style>
                 :host { all: initial; }
                 * { box-sizing: border-box; font-family: -apple-system, system-ui, "Hiragino Sans", sans-serif; }
-                .top { position: fixed; left: 8px; top: 8px; right: 8px; pointer-events: none;
-                       display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+                /*
+                 * 状態の表示（「ホストに自動で合わせています」）は画面の左下に置き、チャット欄の後ろに隠れる（z-index が低い）。
+                 * 上にあると映像にかぶった（2026-09-14 ユーザー要望）。チャット欄を開いている間は見出しに同じ内容を出す。
+                 * 「タップして再開」「ホストの作品を開く」は押す必要があるので、チャット欄より手前に下から積む。
+                 */
+                .status { position: fixed; left: 8px; right: 84px; bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+                          pointer-events: none; display: flex; z-index: 1; }
+                .top { position: fixed; left: 8px; right: 8px; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); pointer-events: none;
+                       display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 8px; z-index: 5; }
+                .hstate { color: #3ddc84; font-weight: 600; margin-left: 6px; }
                 .pill { pointer-events: auto; font: 600 12px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
                         background: rgba(20,20,24,.85); border: 1px solid rgba(255,255,255,.2);
                         border-radius: 999px; padding: 5px 10px; display: flex; gap: 6px; align-items: center; }
@@ -408,10 +436,10 @@ const WP_SHIM = (() => {
                 .fab { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
                        pointer-events: auto; border: 0; border-radius: 999px; min-width: 56px; min-height: 48px;
                        padding: 10px 16px; font: 700 16px/1 -apple-system, system-ui, sans-serif;
-                       color: #fff; background: rgba(58,109,240,.95); box-shadow: 0 2px 10px rgba(0,0,0,.4); }
+                       color: #fff; background: rgba(58,109,240,.95); box-shadow: 0 2px 10px rgba(0,0,0,.4); z-index: 2; }
                 .badge { display: inline-block; min-width: 20px; padding: 2px 6px; margin-left: 6px; border-radius: 10px;
                          background: #e5484d; font-size: 12px; }
-                .panel { position: fixed; right: 8px; left: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+                .panel { position: fixed; z-index: 4; right: 8px; left: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px));
                          max-width: 420px; margin-left: auto; height: min(52vh, 420px);
                          pointer-events: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px;
                          background: rgba(15,15,19,.94); color: #f2f2f4; border: 1px solid #2c2c36; border-radius: 12px; }
@@ -433,14 +461,16 @@ const WP_SHIM = (() => {
                 .send { border: 0; border-radius: 8px; background: #3a6df0; color: #fff; font-size: 16px; font-weight: 700; padding: 0 14px; min-height: 44px; }
                 [hidden] { display: none !important; }
             </style>
-            <div class="top">
+            <div class="status">
                 <div class="pill"><span class="dot"></span><span class="text">Watch Party</span></div>
+            </div>
+            <div class="top">
                 <button class="tap" hidden>▶ タップして再開</button>
                 <a class="other" hidden></a>
             </div>
             <button class="fab">💬<span class="badge" hidden></span></button>
             <div class="panel" hidden>
-                <div class="phead"><span>チャット <small class="ver"></small></span><button class="close" aria-label="閉じる">✕</button></div>
+                <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="close" aria-label="閉じる">✕</button></div>
                 <div class="msgs"></div>
                 <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
             </div>`;
@@ -484,10 +514,7 @@ const WP_SHIM = (() => {
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) {
-                topAlign(video, portrait);
-                shiftUp(video, portrait);
-            }
+            if (video) shiftUp(video, portrait);
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
@@ -592,10 +619,14 @@ const WP_SHIM = (() => {
                 : selfAd ? '広告のあと、ホストに合わせます'
                 : hostAd ? 'ホストの広告が終わるのを待っています'
                 : 'ホストに自動で合わせています';
+            // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
+            q('.hstate').textContent = q('.text').textContent;
+            q('.hstate').style.color = connected && !otherVideo ? '#3ddc84' : '#ffb340';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
             const other = q('.other');
             // 今と同じサイト（amazon.co.jp / primevideo.com）で開く
-            const openOther = location.hostname === 'www.primevideo.com' ? U.urls.primeVideoWeb : U.urls.primeWeb;
+            const openOther = PAGE_SERVICE === 'netflix' ? U.urls.netflixWeb
+                : location.hostname === 'www.primevideo.com' ? U.urls.primeVideoWeb : U.urls.primeWeb;
             const url = otherVideo ? openOther(otherVideo, target.room, target.name, false) : null;
             if (url) {
                 other.href = url;
@@ -610,20 +641,12 @@ const WP_SHIM = (() => {
 
     /** 本編の <video>。拡張機能と同じ基準（5分以上で最長） */
     /*
-     * 縦持ちでは、映像をプレイヤーの一番上に寄せる（2026-09-14 ユーザー要望）。
-     * Amazon のプレイヤーは画面の高さいっぱいの箱で、映像はその真ん中に出る（Android 実機のスクリーンショット）。
-     * 箱はそのままで、映像の出る位置（object-position）だけを上に寄せる。横持ちでは元に戻す。
-     */
-    function topAlign(video, portrait) {
-        const want = portrait ? 'center top' : '';
-        if (video.dataset.wpTop === want) return;
-        if (want) video.style.setProperty('object-position', want, 'important');
-        else video.style.removeProperty('object-position');
-        video.dataset.wpTop = want;
-    }
-
-    /*
-     * それでも映像が上に来ないとき（箱そのものが画面の真ん中に置かれている作り）は、箱ごと上へずらす。
+     * 縦持ちでは、映像を画面の一番上へずらす（2026-09-14 ユーザー要望）。
+     * 実際に映像が映っている位置（contentRect）を計算して、その上端が画面の上端に来るだけ要素ごと上へずらす。
+     *   - Amazon … 画面の高さいっぱいの箱の真ん中に映像（Android 実機のスクリーンショット）
+     *   - Netflix … 画面より縦に長い箱（1134px）を真ん中に置き、その真ん中に映像（本物の Netflix で確認）
+     * 以前は「映像を箱の上端に寄せる（object-position）」にしていたが、Netflix では箱の上端が画面の外（-145px）で、
+     * 映像の上が切れた。どちらの作りでも効くよう、映っている位置からの計算に揃えた。
      * どれだけずらしたかを覚えておき、測り直すたびに元の位置から計算し直す（ずらしが積み重ならないように）。
      */
     function shiftUp(video, portrait) {
@@ -635,8 +658,10 @@ const WP_SHIM = (() => {
             if (originalTop > 8) want = Math.round(originalTop);
         }
         if (want === applied) return;
-        if (want) video.style.setProperty('transform', `translateY(-${want}px)`, 'important');
-        else video.style.removeProperty('transform');
+        // transform ではなく translate を使う。Netflix は映像を真ん中に置くのに自分で transform を付けていて、
+        // それを上書きすると映像が画面の上にはみ出した（2026-09-14 本物の Netflix で確認）。translate なら重ねがけになる
+        if (want) video.style.setProperty('translate', `0 -${want}px`, 'important');
+        else video.style.removeProperty('translate');
         video.dataset.wpShift = String(want);
     }
 
@@ -651,7 +676,10 @@ const WP_SHIM = (() => {
         if (!vw || !vh || !box.width || !box.height) return box;
         const scale = Math.min(box.width / vw, box.height / vh);
         const h = vh * scale;
-        const top = video.dataset.wpTop ? box.top : box.top + (box.height - h) / 2;
+        // 箱の中での縦の位置（object-position の縦。ふつうは 50% ＝真ん中）
+        const posY = String(getComputedStyle(video).objectPosition || '50% 50%').split(/\s+/)[1] || '50%';
+        const ratio = /%$/.test(posY) ? parseFloat(posY) / 100 : posY === 'top' ? 0 : posY === 'bottom' ? 1 : 0.5;
+        const top = box.top + (box.height - h) * (Number.isFinite(ratio) ? ratio : 0.5);
         return { top, bottom: top + h, height: h, width: vw * scale, left: box.left };
     }
 
@@ -1203,6 +1231,564 @@ const WP_SHIM = (() => {
     }
 
     globalThis.WPAdapters.list.push(PrimeAdapter);
+})();
+
+    // ---- extension/adapters/netflix.js ----
+/**
+ * Netflix アダプタ。
+ *
+ * Prime と違い、<video> に currentTime を代入しても効かない。
+ * Netflix は自前の再生状態を持っていて、代入した値をすぐ書き戻してしまう。
+ * そのためページ内部の API を使う（MAIN world で動いているので触れる）:
+ *
+ *   netflix.appContext.state.playerApp.getAPI().videoPlayer
+ *     .getAllPlayerSessionIds()            … 動いているプレイヤーの一覧
+ *     .getVideoPlayerBySessionId(id)       … 個々のプレイヤー
+ *
+ * プレイヤーの時間は**ミリ秒**。このアダプタが外に見せる時間は秒なので、
+ * 出入りのたびに直している（ここを間違えると1000倍ずれる）。
+ *
+ * 一覧には作品ページのプレビュー再生なども混ざる。本編は `watch-` で始まる
+ * セッションなので、それだけを採る（Prime の「長さで選ぶ」に当たる部分）。
+ */
+(() => {
+    const Base = globalThis.WPAdapters.Base;
+
+    // /watch/81234567 と /title/81234567。ロケール付き（/jp-en/ など）もある
+    const NETFLIX_ID = /netflix\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:watch|title)\/(\d{4,12})(?=[/?#]|$)/;
+
+    // 本編のプレイヤーのセッション ID の目印。プレビュー再生と区別する
+    const WATCH_SESSION = /^watch-/;
+
+    const RESCAN_MS = 1000;
+
+    /*
+     * シークの検出。
+     * Netflix のプレイヤーは API で動かすので、人がシークバーを動かしたときに
+     * <video> の seeked が出ないことがある（MSE のバッファを差し替えるため）。
+     * 時計の進みと再生位置の進みを 250ms ごとに比べ、食い違ったらシークとみなす。
+     * 逆に、読み込み待ちで止まった場合は位置が「進まない」だけなので誤検出しない。
+     */
+    const WATCH_MS = 250;
+    const JUMP_SEC = 2.0;
+    // seeked と時間の飛びの両方で気づくことがある。近い時刻のものは1回にまとめる
+    const SEEK_DEDUPE_MS = 1000;
+
+    /*
+     * 再生・停止の押し直し。
+     * シークの直後など、プレイヤーが play() / pause() を取りこぼすことがある。
+     * Prime ほど癖は強くないので、短い間だけ確かめ直す。
+     */
+    const ENFORCE_MS = 2000;
+    const ENFORCE_TICK_MS = 250;
+
+    /*
+     * 「まだ見ていますか？」（interrupter）。
+     * 一定時間操作が無いと Netflix は再生を止めて確認を出す。ホストが止まると全員が止まるので、
+     * ホストのときだけ自動で「続けて見る」を押す（ユーザーの判断。ゲストは自分で押す）。
+     *
+     * ダイアログには「一覧へ戻る」も並んでいる。押し間違えると視聴会が終わってしまうので、
+     * 「進む側」だと確信できるものだけを押す。
+     */
+    const INTERRUPT_SCOPE = '[data-uia*="interrupt" i], .interrupter, .interrupter-actions';
+    // role="dialog" は他の用途でも使われるので、それだけでは信じない。文面で確かめる
+    const STILL_WATCHING = /まだ見ていますか|まだ視聴していますか|still\s*watching/i;
+    const INTERRUPT_GO = /continue|play|still.?watch/i;         // data-uia が進む側を名乗っている
+    const INTERRUPT_BACK = /back|browse|exit|cancel|戻|一覧|終了/i;   // これは絶対に押さない
+    const INTERRUPT_TEXT =
+        /^(続けて(見る|再生|視聴)(する)?|はい[、,]?\s*まだ見ています|まだ見ています|continue\s*watching|continue|yes,?\s*i'?m\s*still\s*watching)$/i;
+    // 押したあと、画面が変わるまでの間に何度も押さない
+    const INTERRUPT_COOLDOWN_MS = 10_000;
+
+    /*
+     * 広告（広告つきプラン）。2026-09-12 に実機で確かめた:
+     *   - player.getAdManager().getPresentingAdBreak() が、広告中だけ広告枠を返す
+     *   - 広告中は canSeek() が false（シークを受け付けない）
+     *   - getCurrentTime() は広告の時間も含んで進む（Prime と同じ）
+     *   - 広告枠の locationMs は「広告を除いた本編の時間」での位置で、広告が流れても変わらない
+     * 詳しくは _watchAds() の説明。
+     */
+    const AD_WATCH_MS = 250;
+
+    // プレイヤーの入れ物。Netflix のクラス名は難読化されるが、この辺りは比較的長く使われている
+    const PLAYER_SCOPE = '.watch-video, [data-uia="video-canvas"], .VideoContainer';
+    const PLAYER_VIDEO = PLAYER_SCOPE.split(', ').map(s => `${s} video`).join(', ');
+
+    class NetflixAdapter extends Base {
+        static get service() { return 'netflix'; }
+
+        static match(url) {
+            return /^https:\/\/www\.netflix\.com\//.test(url);
+        }
+
+        constructor() {
+            super();
+            this._player = null;
+            this._sessionId = null;
+            this._video = null;
+            this._detach = null;
+            this._rescanTimer = null;
+            this._watchTimer = null;
+            this._enforceTimer = null;
+            this._want = null;          // 'play' | 'pause' | null
+            this._wantUntil = 0;
+            this._lastSeekAt = 0;
+            this._lastTime = null;      // 飛びの検出用（秒）
+            this._lastWallMs = 0;
+            this._lastPaused = null;    // 再生/停止の変化を1回だけ知らせるため
+            this._lastDismissAt = 0;
+            this._adOpen = null;        // いま流れている広告枠
+            this._adTimer = null;
+            // 生の位置と本編の時間の対応。広告が明けるたびに増える（_watchAds）
+            this._anchors = [{ content: 0, raw: 0 }];
+        }
+
+        async ready() {
+            await Base.waitFor(() => this._pickPlayer(), { timeoutMs: Infinity });
+            this._watchForReplacement();
+            this._watchJumps();
+            this._watchAds();
+            return this;
+        }
+
+        // --- プレイヤーの取得 ---------------------------------------------------
+
+        /** ページ内部の videoPlayer。まだ読み込まれていなければ null */
+        _videoPlayerApi() {
+            const app = globalThis.netflix?.appContext?.state?.playerApp;
+            const api = app?.getAPI?.();
+            return api?.videoPlayer || null;
+        }
+
+        /**
+         * 本編のプレイヤーを掴む。掴めていれば true。
+         * エピソードが変わるとセッションごと作り直されるので、定期的に見直す。
+         */
+        _pickPlayer() {
+            const vp = this._videoPlayerApi();
+            if (!vp) return false;
+
+            let ids = [];
+            try { ids = vp.getAllPlayerSessionIds() || []; } catch { return false; }
+            const id = ids.find(s => WATCH_SESSION.test(String(s)));
+            if (!id) return false;
+
+            if (id === this._sessionId && this._player) {
+                this._bindVideo();
+                return true;
+            }
+
+            let player;
+            try { player = vp.getVideoPlayerBySessionId(id); } catch { return false; }
+            // 長さが決まるまでは操作しても効かない
+            if (!player || !(Number(player.getDuration?.()) > 0)) return false;
+
+            this._sessionId = id;
+            this._player = player;
+            this._lastTime = null;
+            this._lastPaused = null;
+            // 別の話数になったら時間の数え方も始め直し
+            this._adOpen = null;
+            this._anchors = [{ content: 0, raw: 0 }];
+            this._bindVideo();
+            console.log('[wp] netflix: player', id, this.getDuration());
+            return true;
+        }
+
+        /**
+         * イベントを取るための <video>。
+         * 再生の操作は API で行うが、人が押した再生・停止に気づくには要素のイベントが早い。
+         */
+        _pickVideo() {
+            const inPlayer = document.querySelector(PLAYER_VIDEO);
+            if (inPlayer) return inPlayer;
+            const all = Array.from(document.querySelectorAll('video')).filter(v => v.isConnected);
+            if (all.length === 0) return null;
+            // 画面に出ている中で最も大きいもの（プレビューの小窓を避ける）
+            return all.reduce((a, b) =>
+                b.getBoundingClientRect().width > a.getBoundingClientRect().width ? b : a);
+        }
+
+        _bindVideo() {
+            const video = this._pickVideo();
+            if (!video || this._video === video) return;
+            if (this._detach) this._detach();
+            this._video = video;
+
+            const onPlay = () => {
+                if (this._activeWant() === 'pause') return this._reconcile();
+                this._emitPlayback(false);
+            };
+            const onPause = () => {
+                if (video.seeking) return;   // シークに伴う停止はプレイヤーの都合
+                if (this._activeWant() === 'play') return this._reconcile();
+                this._emitPlayback(true);
+            };
+            const onSeeked = () => this._emitSeek();
+
+            video.addEventListener('play', onPlay);
+            video.addEventListener('pause', onPause);
+            video.addEventListener('seeked', onSeeked);
+            this._detach = () => {
+                video.removeEventListener('play', onPlay);
+                video.removeEventListener('pause', onPause);
+                video.removeEventListener('seeked', onSeeked);
+            };
+        }
+
+        _watchForReplacement() {
+            if (this._rescanTimer) return;
+            this._rescanTimer = setInterval(() => this._pickPlayer(), RESCAN_MS);
+        }
+
+        // --- 状態の変化の検出 ----------------------------------------------------
+
+        /**
+         * 再生／停止が変わったことを1回だけ知らせる。
+         * 要素のイベントからも、下の見張り（_watchJumps）からも呼ばれるので、
+         * 同じ変化を二度送らないようここでまとめる。
+         */
+        _emitPlayback(paused) {
+            if (this._lastPaused === paused) return;
+            this._lastPaused = paused;
+            this._emit(paused ? 'pause' : 'play');
+        }
+
+        _emitSeek() {
+            const now = Date.now();
+            if (now - this._lastSeekAt < SEEK_DEDUPE_MS) return;
+            this._lastSeekAt = now;
+            // 飛んだ先を次の基準にする（同じ飛びを二度数えない）
+            this._lastTime = this.getCurrentTime();
+            this._lastWallMs = now;
+            this._emit('seek');
+        }
+
+        /**
+         * 時計の進みと再生位置の進みを比べ、食い違ったらシークとみなす。
+         * あわせて再生／停止も見張る。Netflix のクラス名は難読化されていて変わるので、
+         * <video> を見失ってイベントが来なくなっても、ここだけで気づけるようにしておく。
+         */
+        _watchJumps() {
+            if (this._watchTimer) return;
+            this._watchTimer = setInterval(() => {
+                if (!this._player) return;
+                // 広告の間は本編が止まって見える（時計だけ進む）。ここで見ると必ず食い違うので見ない。
+                // 広告の出入りは _watchAds が別に見ている
+                if (this._adOpen) { this._lastTime = null; return; }
+
+                // 自分で合わせ込んでいる最中の変化は人の操作ではないので数えない
+                if (!this._activeWant()) {
+                    const paused = this.isPaused();
+                    if (this._lastPaused === null) this._lastPaused = paused;
+                    else this._emitPlayback(paused);
+                }
+
+                const t = this.getCurrentTime();
+                const wall = Date.now();
+                if (this._lastTime === null) {
+                    this._lastTime = t;
+                    this._lastWallMs = wall;
+                    return;
+                }
+                const moved = t - this._lastTime;
+                const elapsed = (wall - this._lastWallMs) / 1000;
+                this._lastTime = t;
+                this._lastWallMs = wall;
+                // 再生していれば moved ≒ elapsed、止まっていれば moved ≒ 0。
+                // どちらからも大きく外れたら、位置が飛んだということ
+                const expected = this.isPaused() ? 0 : elapsed;
+                if (Math.abs(moved - expected) > JUMP_SEC) this._emitSeek();
+            }, WATCH_MS);
+        }
+
+        // --- 再生の状態 ---------------------------------------------------------
+
+        /** プレイヤーが持っている生の再生位置（秒）。広告の時間も含んでいる */
+        _rawTime() {
+            const ms = this._player?.getCurrentTime?.();
+            if (Number.isFinite(ms)) return ms / 1000;
+            return this._video ? this._video.currentTime : 0;
+        }
+
+        /** 外に見せるのは「広告を除いた本編の時間」 */
+        getCurrentTime() {
+            return this._toContent(this._rawTime());
+        }
+
+        getDuration() {
+            const ms = this._player?.getDuration?.();
+            return Number.isFinite(ms) ? ms / 1000 : NaN;
+        }
+
+        isPaused() {
+            const p = this._player;
+            if (p) {
+                if (typeof p.isPaused === 'function') return Boolean(p.isPaused());
+                if (typeof p.isPlaying === 'function') return !p.isPlaying();
+            }
+            return this._video ? this._video.paused : true;
+        }
+
+        isPlayerOpen() {
+            return Boolean(this._player);
+        }
+
+        /**
+         * Prime は再生を始めると同じ作品の URL を書き換えるので無視する必要があったが、
+         * Netflix の URL が変わるのは別の話数へ進んだときで、これは本当の作品の切り替え。
+         * ゲストにも移ってもらう必要があるので無視しない。
+         */
+        ignoreUrlChange() { return false; }
+
+        play() {
+            if (!this._player) return;
+            this._request('play');
+            this._playNow();
+        }
+
+        pause() {
+            if (!this._player) return;
+            this._request('pause');
+            this._player.pause?.();
+        }
+
+        _playNow() {
+            try { this._player?.play?.(); } catch (e) { console.warn('[wp] play failed', e); }
+        }
+
+        /** 本編の時間で指定する（広告の分は中で足し戻す） */
+        seek(seconds) {
+            if (!this._player) return;
+            // 広告中はプレイヤーがシークを受け付けない（canSeek() が false）
+            if (this.isInAd()) return;
+
+            let raw = this._toRaw(Math.max(0, seconds));
+            const duration = this.getDuration();   // 生の長さ（広告込み）
+            if (Number.isFinite(duration) && duration > 0) raw = Math.min(raw, duration);
+
+            // 自分で動かした分は「人が飛ばした」と数えない。動かす前に印をつける
+            // （プレイヤーによっては seek() の中で同期的に seeked が飛んでくる）
+            this._lastSeekAt = Date.now();
+            this._lastTime = this._toContent(raw);
+            this._lastWallMs = this._lastSeekAt;
+            // プレイヤーはミリ秒で受け取る
+            this._player.seek?.(Math.round(raw * 1000));
+        }
+
+        releaseControl() {
+            this._want = null;
+            clearInterval(this._enforceTimer);
+        }
+
+        _activeWant() {
+            if (this._want && Date.now() > this._wantUntil) this._want = null;
+            return this._want;
+        }
+
+        _request(state) {
+            this._want = state;
+            this._wantUntil = Date.now() + ENFORCE_MS;
+            clearInterval(this._enforceTimer);
+            this._enforceTimer = setInterval(() => {
+                if (!this._activeWant()) return clearInterval(this._enforceTimer);
+                this._reconcile();
+            }, ENFORCE_TICK_MS);
+        }
+
+        _reconcile() {
+            const want = this._activeWant();
+            if (!this._player || !want) return;
+            if (this._video?.seeking) return;
+            if (this.isInAd()) return;   // 広告中は触らない（止めると広告も止まる）
+            if (want === 'play' && this.isPaused()) this._playNow();
+            else if (want === 'pause' && !this.isPaused()) this._player.pause?.();
+        }
+
+        // --- 「まだ見ていますか？」 ------------------------------------------------
+
+        /**
+         * 「まだ見ていますか？」のダイアログを探す。
+         * 見当違いの所を押さないよう、Netflix がそれと名乗っているものか、
+         * 文面がそう読めるものだけを対象にする。
+         */
+        _interruptScope() {
+            const named = document.querySelector(INTERRUPT_SCOPE);
+            if (named) return named;
+            for (const el of document.querySelectorAll('[role="dialog"]')) {
+                if (STILL_WATCHING.test(el.textContent)) return el;
+            }
+            return null;
+        }
+
+        dismissInterruption() {
+            if (Date.now() - this._lastDismissAt < INTERRUPT_COOLDOWN_MS) return false;
+            const scope = this._interruptScope();
+            if (!scope) return false;
+
+            const buttons = Array.from(scope.querySelectorAll('button, [role="button"], a'))
+                .filter(el => {
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 10 || r.height < 10) return false;
+                    const name = `${el.getAttribute('data-uia') || ''} ${el.getAttribute('aria-label') || ''}`;
+                    return !INTERRUPT_BACK.test(name) && !INTERRUPT_BACK.test(el.textContent);
+                });
+
+            const btn = buttons.find(el => INTERRUPT_GO.test(el.getAttribute('data-uia') || ''))
+                || buttons.find(el => INTERRUPT_TEXT.test(el.textContent.trim()));
+            if (!btn) return false;
+
+            this._lastDismissAt = Date.now();
+            btn.click();
+            this._reportDiag('interrupt-dismissed', {
+                button: btn.getAttribute('data-uia') || btn.textContent.trim().slice(0, 30)
+            });
+            return true;
+        }
+
+        // --- 広告 ---------------------------------------------------------------
+
+        _adManager() {
+            try { return this._player?.getAdManager?.() || null; } catch { return null; }
+        }
+
+        /** いま流れている広告枠。広告中でなければ null */
+        _presentingBreak() {
+            const am = this._adManager();
+            if (!am) return null;
+            try { return am.getPresentingAdBreak() || null; } catch { return null; }
+        }
+
+        /**
+         * 広告中か。
+         * プレイヤー自身が「いまこの広告枠を出している」と教えてくれるので、
+         * 画面の文字を読んで当てにいく必要がない（Prime はそれが無くて苦労した）。
+         */
+        isInAd() { return this._presentingBreak() !== null; }
+
+        /** 広告枠の本編上の位置（ミリ秒）。番号で引く */
+        _breakContentMs(index) {
+            const am = this._adManager();
+            if (!am) return null;
+            try {
+                const hit = (am.getAds() || []).find(a => a.viewableAdBreakIndex === index);
+                return hit && Number.isFinite(hit.locationMs) ? hit.locationMs : null;
+            } catch { return null; }
+        }
+
+        /**
+         * 広告の出入りを見張り、明けるたびに「生の位置」と「本編の位置」の対応（目印）を足す。
+         *
+         * 実機で確かめたこと（2026-09-12）:
+         *   - getCurrentTime() は広告の時間も含んで進む（Prime と同じ）
+         *   - 広告枠の locationMs は**本編の時間**での位置で、広告が流れても変わらない
+         *     （実測: 広告枠 1273605ms + 広告 19922ms ≒ 広告明けの 1294100ms）
+         * つまり広告が明けた瞬間の本編の位置は locationMs そのもの。そこを目印にすれば、
+         * Prime のように広告の長さを測って足し込む必要がなく、誤差も積み重ならない。
+         */
+        _watchAds() {
+            if (this._adTimer) return;
+            this._adTimer = setInterval(() => {
+                if (!this._player) return;
+                const brk = this._presentingBreak();
+
+                // 広告の出入りの記録は bridge.js が別に書いている（ここで書くと二重になる）
+                if (brk && !this._adOpen) {
+                    this._adOpen = {
+                        index: brk.index,
+                        contentMs: this._breakContentMs(brk.index),
+                        rawStart: this._rawTime()
+                    };
+                } else if (!brk && this._adOpen) {
+                    const raw = this._rawTime();
+                    const open = this._adOpen;
+                    this._adOpen = null;
+                    if (Number.isFinite(open.contentMs)) {
+                        this._addAnchor(open.contentMs / 1000, raw);
+                    }
+                }
+            }, AD_WATCH_MS);
+        }
+
+        /**
+         * 目印（生の位置 ↔ 本編の位置）を1つ足す。
+         * 同じ広告枠をもう一度通ったら、新しいほうで置き換える。
+         */
+        _addAnchor(contentSec, rawSec) {
+            this._anchors = this._anchors.filter(a => Math.abs(a.content - contentSec) > 0.5);
+            this._anchors.push({ content: contentSec, raw: rawSec });
+            this._anchors.sort((a, b) => a.content - b.content);
+        }
+
+        /** 生の位置 → 本編の時間 */
+        _toContent(raw) {
+            // 広告中は本編が進んでいない。その広告枠の位置で止まって見える
+            if (this._adOpen && Number.isFinite(this._adOpen.contentMs)) {
+                return this._adOpen.contentMs / 1000;
+            }
+            let best = this._anchors[0];
+            for (const a of this._anchors) { if (a.raw <= raw + 0.001) best = a; }
+            return Math.max(0, best.content + (raw - best.raw));
+        }
+
+        /** 本編の時間 → 生の位置 */
+        _toRaw(content) {
+            let best = this._anchors[0];
+            for (const a of this._anchors) { if (a.content <= content + 0.001) best = a; }
+            return Math.max(0, best.raw + (content - best.content));
+        }
+
+        describeForDiag() {
+            const am = this._adManager();
+            let ads = null, hasAds = null, canSeek = null;
+            if (am) {
+                try { hasAds = am.hasAds(); } catch { /* 取れない */ }
+                try { canSeek = am.canSeek(); } catch { /* 取れない */ }
+                try {
+                    ads = (am.getAds() || []).map(a => ({
+                        i: a.viewableAdBreakIndex,
+                        atSec: Math.round(a.locationMs / 100) / 10,
+                        played: Boolean(a.hasCompletedPlayback)
+                    }));
+                } catch { /* 取れない */ }
+            }
+            let sessions = [];
+            try { sessions = (this._videoPlayerApi()?.getAllPlayerSessionIds() || []).map(String); } catch { /* 未読み込み */ }
+            const raw = this._rawTime();
+            return {
+                sessionId: this._sessionId,
+                sessions,
+                rawTime: Math.round(raw * 10) / 10,
+                contentTime: Math.round(this._toContent(raw) * 10) / 10,
+                duration: Math.round(this.getDuration()),
+                paused: this.isPaused(),
+                inAd: this.isInAd(),
+                hasAds,
+                canSeek,
+                ads,
+                anchors: this._anchors.map(a => ({
+                    content: Math.round(a.content * 10) / 10,
+                    raw: Math.round(a.raw * 10) / 10
+                }))
+            };
+        }
+
+        // --- 作品 ---------------------------------------------------------------
+
+        getContentId(url = location.href) {
+            const m = url.match(NETFLIX_ID);
+            return m ? m[1] : null;
+        }
+
+        buildUrl(contentId) {
+            if (!contentId) return null;
+            // /watch/ を開くと、ログイン済みならそのまま再生が始まる。
+            // 未ログインならログイン画面を経由し、済ませるとこの URL へ戻る
+            return `https://www.netflix.com/watch/${contentId}`;
+        }
+    }
+
+    globalThis.WPAdapters.list.push(NetflixAdapter);
 })();
 
     // ---- extension/adapters/registry.js ----
