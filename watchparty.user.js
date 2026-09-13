@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.15.0
+// @version      0.16.0
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -16,7 +16,7 @@
     'use strict';
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.15.0";
+    const __WP_VERSION__ = "0.16.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -309,6 +309,8 @@ const WP_SHIM = (() => {
         let me = null;
         /** ホストが別の作品に変えたときの、その作品（cleanVideo 済み）。同じ作品なら null */
         let otherVideo = null;
+        /** ホストの作品が変わって、まだ送られていない（2026-09-14）。送られるまで合わせない */
+        let hostHold = false;
 
         /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
         function sameTitle(v) {
@@ -348,7 +350,7 @@ const WP_SHIM = (() => {
             if (p.type === 'play') hostPlaying = true;
             else if (p.type === 'pause') hostPlaying = false;
             else if (p.type === 'tick') { hostPlaying = !p.paused && !p.ad; hostAd = Boolean(p.ad); }
-            if (!otherVideo) {
+            if (!otherVideo && !hostHold) {
                 toBridge('APPLY', {
                     type: p.type,
                     currentTime: sec,
@@ -365,9 +367,10 @@ const WP_SHIM = (() => {
             if (!s || typeof s !== 'object') return;
             const sec = U.cleanSec(s.currentTime);
             if (sec === null) return;
+            hostHold = s.hold === true;
             checkTitle(s);
             hostPlaying = Boolean(s.isPlaying);
-            if (!otherVideo) {
+            if (!otherVideo && !hostHold) {
                 toBridge('APPLY', {
                     type: s.isPlaying ? 'play' : 'pause',
                     currentTime: sec,
@@ -377,7 +380,13 @@ const WP_SHIM = (() => {
             render();
         });
 
-        socket.on('change-video', (v) => checkTitle(v));
+        socket.on('change-video', (v) => {
+            hostHold = false;
+            checkTitle(v);
+            // 同じ作品が送り直された（Prime の次の話で、アドレスが変わらないとき）→ ホストの今の位置を取り直す
+            if (!otherVideo && connected) socket.emit('request-sync');
+        });
+        socket.on('host-hold', () => { hostHold = true; render(); });
         // ホストの GTI はあとから届く。このページが GTI で開かれていて一致したら、同じ作品として合わせ直す
         socket.on('video-meta', (m) => {
             if (!m || typeof m !== 'object' || !otherVideo || otherVideo.service !== 'prime') return;
@@ -561,6 +570,44 @@ const WP_SHIM = (() => {
                 ua: navigator.userAgent
             });
         }
+        /*
+         * 広告の表示の記録（2026-09-14）。iPhone の Safari で、ゲストの広告の時間まで本編の時間に数えてずれた。
+         * PC で確かめた「広告 1:04」の見分け方がスマホ用の画面で効いていないとみて、実際の表示を集める。
+         * 送るのは「広告」「Ad」「スキップ」「スポンサー」を含む短い文字（プレイヤーの表示）と、再生位置の数だけ。
+         * 表示が変わったときだけ、1ページ30回まで。
+         */
+        let adReports = 0;
+        let lastAdKey = '';
+        function reportAds() {
+            if (!connected || PAGE_SERVICE !== 'prime' || adReports >= 30) return;
+            const vids = Array.from(document.querySelectorAll('video')).filter(v => Number.isFinite(v.duration) && v.duration >= 300);
+            if (!vids.length) return;
+            const v = vids.reduce((a, b) => (b.duration > a.duration ? b : a));
+            const texts = [];
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode() && texts.length < 6) {
+                const s = walker.currentNode.textContent.trim();
+                if (!s || s.length > 40 || !/広告|スキップ|スポンサー|^Ads?\b/.test(s)) continue;
+                const el = walker.currentNode.parentElement;
+                if (!el) continue;
+                // 映像に重なっている表示だけ（ページ下の「広告掲載」などは関係ない）
+                const er = el.getBoundingClientRect(), vr = v.getBoundingClientRect();
+                if (er.width === 0 || er.right < vr.left || er.left > vr.right || er.bottom < vr.top || er.top > vr.bottom) continue;
+                // 残り時間が隣の要素にあることがあるので、少し上の要素の文字も添える
+                let up = el;
+                for (let i = 0; i < 3 && up.parentElement && up.parentElement.textContent.length <= 60; i++) up = up.parentElement;
+                texts.push({ s, around: up.textContent.replace(/\s+/g, ' ').trim().slice(0, 60) });
+            }
+            const key = JSON.stringify(texts) + selfAd;
+            if (key === lastAdKey) return;
+            lastAdKey = key;
+            adReports++;
+            socket.emit('ad-report', {
+                version: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '',
+                selfAd, texts, t: v.currentTime, d: v.duration, paused: v.paused
+            });
+        }
+        if (PAGE_SERVICE === 'prime') setInterval(reportAds, 1000);
         globalThis.visualViewport?.addEventListener('resize', placePanel);
         globalThis.visualViewport?.addEventListener('scroll', placePanel);
         window.addEventListener('resize', placePanel);
@@ -606,7 +653,7 @@ const WP_SHIM = (() => {
         });
         setInterval(() => {
             const v = mainVideo();
-            const stuck = v && hostPlaying && !selfAd && !otherVideo && v.paused;
+            const stuck = v && hostPlaying && !selfAd && !otherVideo && !hostHold && v.paused;
             blockedSince = stuck ? (blockedSince || Date.now()) : 0;
             render();
         }, 1000);
@@ -615,13 +662,14 @@ const WP_SHIM = (() => {
             q('.dot').className = 'dot' + (connected ? ' on' : '');
             q('.text').textContent =
                 !connected ? 'Watch Party つないでいます…'
+                : hostHold ? 'ホストが次の作品を選んでいます'
                 : otherVideo ? 'ホストが別の作品に変えました'
                 : selfAd ? '広告のあと、ホストに合わせます'
                 : hostAd ? 'ホストの広告が終わるのを待っています'
                 : 'ホストに自動で合わせています';
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
-            q('.hstate').style.color = connected && !otherVideo ? '#3ddc84' : '#ffb340';
+            q('.hstate').style.color = connected && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
             const other = q('.other');
             // 今と同じサイト（amazon.co.jp / primevideo.com）で開く
@@ -896,7 +944,10 @@ const WP_SHIM = (() => {
      *   本編の時間 = currentTime − それまでの広告の合計 として扱う。
      *   ページを読み込み直すと <video> の時間は本編の時間から始め直しになる（広告の記録も捨てる）。
      */
-    const AD_COUNTDOWN = /広告\s*\d{1,2}:\d{2}/;
+    // 「広告 1:04」（PC）。間に「(1/2)」「・」などが挟まっても拾う。英語表示の「Ad 0:15」も。
+    // 間に文字（「広告付きで視聴」など）が入るものは広告のカウントダウンとみなさない
+    const AD_COUNTDOWN = /(?:広告|\bAds?\b)[\s・·:：|()（）]*(?:\d+\s*(?:\/|of)\s*\d+[\s・·:：|()（）]*)?\d{1,2}:\d{2}/;
+    const AD_LABEL = /広告|^\s*Ads?\b/;
     const AD_TRACK_MS = 250;
     // 1回の計測でこれ以上進んだら、広告の再生ではなくシークによる移動とみなす（秒）
     const AD_JUMP_SEC = 1.5;
@@ -1016,14 +1067,17 @@ const WP_SHIM = (() => {
             }
             this._adEl = null;
 
-            // 「広告」だけが書かれた文字を探し、そこから少し上がって残り時間と一緒になる要素を取る。
-            // クラス名は難読化されていて変わるので使わない
+            // 「広告」を含む短い文字を探し、そこから少し上がって残り時間と一緒になる要素を取る。
+            // クラス名は難読化されていて変わるので使わない。
+            // PC では「広告」だけの文字だったが、iPhone（スマホ用の画面）では見落としていた（2026-09-14）。
+            // 「広告 · 0:15」「広告 (1/2)」のように一つにまとまっていても拾えるよう、含むかで見る
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
             while (walker.nextNode()) {
-                if (walker.currentNode.textContent.trim() !== '広告') continue;
+                const s = walker.currentNode.textContent;
+                if (s.length > 30 || !AD_LABEL.test(s)) continue;
                 let el = walker.currentNode.parentElement;
-                for (let i = 0; i < 3 && el; i++, el = el.parentElement) {
-                    if (el.textContent.length > 30) break;
+                for (let i = 0; i < 5 && el; i++, el = el.parentElement) {
+                    if (el.textContent.length > 60) break;
                     const hit = read(el);
                     if (hit) { this._adEl = el; return hit; }
                 }
@@ -2199,6 +2253,35 @@ const WP_SHIM = (() => {
      * 終わったらホストの今の位置を取り直す（広告中はホストからの操作を無視しているため）。
      * 広告の見分け方はまだ実際の広告で確かめきれていないので、出入りのたびに様子を記録して送る。
      */
+    /*
+     * 同じページのまま作品が変わったらしいことに気づく（ホストのみ・2026-09-14）。
+     * Prime はドラマの次の話へ自動で進んでもアドレスが変わらないことがあり、今までは気づけず、
+     * ゲストが前の話のまま新しい話の時刻に合わせてしまった。次のどちらかで「変わった」とする:
+     *   - 動画の長さが30秒以上変わった（別の話は長さが違う）
+     *   - 最後の90秒あたりから、いきなり最初の30秒に戻った（長さがたまたま同じ話でも拾う）
+     * Netflix / YouTube は次の話でアドレスが変わるので、ここでは Prime だけを見る（Netflix は広告で長さが揺れる）。
+     * 気づいたら background が「保留」にし、ホストが「今の作品をゲストに送る」を押すまで再生位置を送らない。
+     */
+    function watchTitle() {
+        let lastDur = NaN;
+        let lastT = NaN;
+        setInterval(() => {
+            if (!bound || !isHost || adapter.constructor.service !== 'prime' || adapter.isInAd()) return;
+            const dur = adapter.getDuration();
+            const t = adapter.getCurrentTime();
+            if (!Number.isFinite(dur) || dur <= 0 || !Number.isFinite(t)) return;
+            const lengthChanged = Number.isFinite(lastDur) && Math.abs(dur - lastDur) > 30;
+            const restarted = Number.isFinite(lastT) && Number.isFinite(lastDur) && lastDur > 300 &&
+                lastT > lastDur - 90 && t < 30;
+            if (lengthChanged || restarted) {
+                post('DIAG', { event: 'title-changed', url: location.href, lastDur, dur, lastT, t });
+                post('TITLE_CHANGED', pageInfo());
+            }
+            lastDur = dur;
+            lastT = t;
+        }, 2000);
+    }
+
     function watchAds() {
         setInterval(() => {
             const now = adapter.isInAd();
@@ -2253,6 +2336,7 @@ const WP_SHIM = (() => {
 
         startHeartbeat();
         watchAds();
+        watchTitle();
         watchInterruptions();
 
         post('READY', pageInfo());
