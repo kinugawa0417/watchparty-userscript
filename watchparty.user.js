@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.19.0
+// @version      0.19.1
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.19.0";
+    const __WP_VERSION__ = "0.19.1";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -525,6 +525,8 @@ const WP_SHIM = (() => {
                        font: 700 16px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
                        background: #3a6df0; border-radius: 10px; padding: 12px 16px; }
                 .other { background: #1f8a5a; max-width: 100%; }
+                .tap { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 6;
+                       font-size: 20px; padding: 16px 28px; border-radius: 999px; box-shadow: 0 4px 18px rgba(0,0,0,.5); white-space: nowrap; }
                 .update { pointer-events: auto; border: 0; text-align: left; max-width: 100%;
                           font: 600 14px/1.5 -apple-system, system-ui, sans-serif; color: #1a1300;
                           background: #ffcc33; border-radius: 10px; padding: 10px 12px; }
@@ -562,9 +564,10 @@ const WP_SHIM = (() => {
             <div class="status">
                 <div class="pill"><span class="dot"></span><span class="text">Watch Party</span></div>
             </div>
+            <!-- 映像の真ん中に大きく出す（2026-09-14 Android エミュレーター: Amazon のスマホ向けプレイヤーは人が触るまで再生しない。左下の小さいボタンでは気づきにくかった） -->
+            <button class="tap" hidden>▶ タップして再生</button>
             <div class="top">
                 <button class="update" hidden></button>
-                <button class="tap" hidden>▶ タップして再開</button>
                 <a class="other" hidden></a>
             </div>
             <button class="fab">💬<span class="badge" hidden></span></button>
@@ -872,6 +875,12 @@ const WP_SHIM = (() => {
             q('.hstate').textContent = q('.text').textContent;
             q('.hstate').style.color = connected && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
+            if (!q('.tap').hidden) {
+                // 見えている映像の真ん中へ（映像が見つからなければ画面の少し上）
+                const v = layoutVideo();
+                const r = v ? contentRect(v) : null;
+                q('.tap').style.top = r && r.height > 0 ? `${Math.round(r.top + r.height / 2)}px` : '40%';
+            }
             const other = q('.other');
             // 今と同じサイト（amazon.co.jp / primevideo.com）で開く
             const openOther = PAGE_SERVICE === 'netflix' ? U.urls.netflixWeb
