@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.20.0
+// @version      0.20.1
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.20.0";
+    const __WP_VERSION__ = "0.20.1";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -316,6 +316,7 @@ const WP_SHIM = (() => {
     const SRC_UI = 'wp-ui';
     const KEY = 'wp:userscript';
     const PLAY_BLOCKED_MS = 3000;
+    const IS_ANDROID = /Android/i.test(navigator.userAgent);
     // 作品ページのアドレス。amazon.co.jp の /gp/video/detail/ID と、primevideo.com の /detail/ID（GTI は - を含む）
     const AMAZON_DETAIL = /\/(?:gp\/video\/)?detail\/([A-Za-z0-9.-]{10,80})(?=[/?#]|$)/;
     const SYNC_TYPES = new Set(['play', 'pause', 'seek', 'tick']);
@@ -930,7 +931,13 @@ const WP_SHIM = (() => {
     function shiftUp(video, portrait, visibleTop = 0) {
         const applied = Number(video.dataset.wpShift || 0);
         let want = 0;
-        if (portrait) {
+        /*
+         * Android では映像の部品に触らない（2026-09-14 実機）: v0.19 で再生前から映像をずらすようにしたら、Android の Firefox で
+         * 「ビデオを視聴できません」になった（記録に "Play interrupted by pause"）。保護された動画を端末の専用の仕組みで
+         * 再生するため、準備中に部品を動かすと失敗するとみる（ソフトウェアで再生するエミュレーターでは再現しない）。
+         * チャット欄は映っている映像の下に置く（placePanel）ので、重なりはしない
+         */
+        if (portrait && !IS_ANDROID) {
             const r = contentRect(video);
             const originalTop = r.top + applied;          // ずらす前の、映像の上端
             const d = Math.round(originalTop - visibleTop);
