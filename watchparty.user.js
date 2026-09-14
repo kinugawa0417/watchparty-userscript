@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.19.1
+// @version      0.20.0
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.19.1";
+    const __WP_VERSION__ = "0.20.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -253,6 +253,11 @@ const WP_US = (() => {
             /^\p{Extended_Pictographic}[\p{Extended_Pictographic}‍️]*$/u.test(s);
     }
 
+    /** 同じ発言か見分けるための鍵（入る前の発言を受け取り直したとき、二重に出さないため）。システムの知らせは null */
+    function messageKey(m) {
+        return m && m.type === 'user' ? [m.timestamp, m.username, m.content].map(String).join('') : null;
+    }
+
     /** チャットの1件を、文字だけで組み立てる */
     function messageRow(m, me) {
         const row = document.createElement('div');
@@ -281,7 +286,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
+    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, messageKey, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -475,6 +480,11 @@ const WP_SHIM = (() => {
             }
         });
         socket.on('receive-message', (m) => { if (m && typeof m === 'object') addMessage(m); });
+        // 入る前の発言（2026-09-14 ユーザー要望）。同じ発言は二重に出さない
+        socket.on('chat-history', (list) => {
+            if (!Array.isArray(list)) return;
+            for (const m of list.slice(-50)) if (m && typeof m === 'object' && m.type === 'user') addMessage(m, true);
+        });
 
         // --- bridge.js から ---------------------------------------------------
         window.addEventListener('message', (ev) => {
@@ -811,13 +821,17 @@ const WP_SHIM = (() => {
             q('.badge').hidden = unread === 0;
             q('.badge').textContent = unread > 99 ? '99+' : String(unread);
         }
-        function addMessage(m) {
+        const shownMsgs = new Set();
+        /** quiet … 入る前の発言（chat-history）。未読の数には数えない */
+        function addMessage(m, quiet = false) {
+            const key = U.messageKey(m);
+            if (key) { if (shownMsgs.has(key)) return; shownMsgs.add(key); }
             const box = q('.msgs');
             const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
             box.appendChild(U.messageRow(m, me));
             while (box.children.length > 100) box.firstChild.remove();
             if (nearEnd || m.senderId === me) box.scrollTop = box.scrollHeight;
-            if (!open && m.type === 'user' && m.senderId !== me) {
+            if (!quiet && !open && m.type === 'user' && m.senderId !== me) {
                 unread++;
                 renderBadge();
             }
