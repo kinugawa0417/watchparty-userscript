@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.23.1
+// @version      0.23.2
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.23.1";
+    const __WP_VERSION__ = "0.23.2";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -130,6 +130,12 @@ const WP_US = (() => {
     // スクリプトの版（0.16.0 の形）と公開日（2026-09-14 の形）
     const VERSION_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}$/;
     const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+    /*
+     * 招待ページの版（https://<8桁>.watchparty-hub.pages.dev/ の 8 桁）。PC のゲストがチャットを別の窓で開くのに使う（2026-09-14）。
+     * アドレスの指定は誰でも作れるので、開く先はこの形（自分たちの Cloudflare Pages の版）に限る
+     */
+    const HUB_ID_RE = /^[0-9a-f]{8}$/;
+    const hubUrl = (id) => (HUB_ID_RE.test(id || '') ? `https://${id}.watchparty-hub.pages.dev/` : null);
 
     /** 版 a が版 b より古いか（形が違えば false） */
     function olderVersion(a, b) {
@@ -150,7 +156,8 @@ const WP_US = (() => {
      * スクリプトは自分の版と比べて、古ければ「スクリプトが更新されました」と出す（2026-09-14）
      */
     function scriptQuery(s) {
-        return s && VERSION_RE.test(s.version) && DATE_RE.test(s.date) ? `&wpv=${s.version}&wpd=${s.date}` : '';
+        const ver = s && VERSION_RE.test(s.version) && DATE_RE.test(s.date) ? `&wpv=${s.version}&wpd=${s.date}` : '';
+        return ver + (s && HUB_ID_RE.test(s.hub || '') ? `&wph=${s.hub}` : '');
     }
 
     /*
@@ -298,7 +305,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
+    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, HUB_ID_RE, hubUrl, safeColor, isReaction, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -354,7 +361,8 @@ const WP_SHIM = (() => {
                 contentId: id ? id[1] : null,
                 // 友達の画面に入っている最新のスクリプトの版と公開日（古ければ「更新されました」を出す）
                 latest: WP_US.VERSION_RE.test(q.get('wpv') || '') ? q.get('wpv') : null,
-                latestDate: WP_US.DATE_RE.test(q.get('wpd') || '') ? q.get('wpd') : null
+                latestDate: WP_US.DATE_RE.test(q.get('wpd') || '') ? q.get('wpd') : null,
+                hub: WP_US.HUB_ID_RE.test(q.get('wph') || '') ? q.get('wph') : null
             };
             try { sessionStorage.setItem(KEY, JSON.stringify(v)); } catch { /* 使えない設定 */ }
             return v;
@@ -367,7 +375,8 @@ const WP_SHIM = (() => {
                     name: String(saved.name || 'スマホ').slice(0, 20),
                     contentId: typeof saved.contentId === 'string' ? saved.contentId : null,
                     latest: WP_US.VERSION_RE.test(saved.latest || '') ? saved.latest : null,
-                    latestDate: WP_US.DATE_RE.test(saved.latestDate || '') ? saved.latestDate : null
+                    latestDate: WP_US.DATE_RE.test(saved.latestDate || '') ? saved.latestDate : null,
+                    hub: WP_US.HUB_ID_RE.test(saved.hub || '') ? saved.hub : null
                 };
             }
         } catch { /* 壊れていたら無視 */ }
@@ -586,6 +595,13 @@ const WP_SHIM = (() => {
                 .other { background: #1f8a5a; max-width: 100%; }
                 .tap { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 6;
                        font-size: 20px; padding: 16px 28px; border-radius: 999px; box-shadow: 0 4px 18px rgba(0,0,0,.5); white-space: nowrap; }
+                /* 広告の時間を確かめるための「1回タップ」の知らせ。見逃されたので真ん中に大きく出す（2026-09-14）。
+                   押す場所ではなく知らせなので、触ったらそのまま Amazon のプレイヤーに届く（pointer-events: none）。触ったら消す */
+                .clock { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 6; pointer-events: none;
+                         font: 700 20px/1.5 -apple-system, system-ui, sans-serif; color: #fff; text-align: center;
+                         background: rgba(20,20,26,.88); border: 2px solid #ffcc33; border-radius: 16px; padding: 16px 22px;
+                         box-shadow: 0 4px 18px rgba(0,0,0,.5); max-width: min(90vw, 460px); }
+                .clock small { display: block; font-size: 14px; font-weight: 600; color: #d8d8e0; margin-top: 4px; }
                 .update { pointer-events: auto; border: 0; text-align: left; max-width: 100%;
                           font: 600 14px/1.5 -apple-system, system-ui, sans-serif; color: #1a1300;
                           background: #ffcc33; border-radius: 10px; padding: 10px 12px; }
@@ -606,7 +622,13 @@ const WP_SHIM = (() => {
                 .panel[data-place="side"] {
                          background: rgba(0,0,0,.18); border-color: rgba(255,255,255,.12);
                          text-shadow: 0 0 3px #000, 0 1px 2px #000, 0 0 6px rgba(0,0,0,.8); }
-                .panel[data-place="side"] .phead { color: #e0e0e6; }
+                .panel[data-place="side"] .phead { color: #e0e0e6; font-size: 15px; }
+                /* PC の大きな画面では字が小さく見えたので大きめに（2026-09-14 ユーザー要望） */
+                .panel[data-place="side"] .msgs { font-size: 17px; }
+                .panel[data-place="side"] .msg.system { font-size: 14px; }
+                .panel[data-place="side"] .notice { font-size: 14px; }
+                .panel[data-place="side"] .msg.big .body { font-size: 30px; }
+                .pop { border: 0; border-radius: 8px; background: rgba(58,58,70,.6); color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; cursor: pointer; }
                 .panel[data-place="side"] input { background: rgba(20,20,26,.55); border-color: rgba(255,255,255,.2); }
                 .panel[data-place="side"] .close { background: rgba(58,58,70,.6); }
                 .phead { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9a9aa6; }
@@ -640,13 +662,14 @@ const WP_SHIM = (() => {
             </div>
             <!-- 映像の真ん中に大きく出す（2026-09-14 Android エミュレーター: Amazon のスマホ向けプレイヤーは人が触るまで再生しない。左下の小さいボタンでは気づきにくかった） -->
             <button class="tap" hidden>▶ タップして再生</button>
+            <div class="clock" hidden></div>
             <div class="top">
                 <button class="update" hidden></button>
                 <a class="other" hidden></a>
             </div>
             <button class="fab">💬<span class="badge" hidden></span></button>
             <div class="panel" hidden>
-                <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="close" aria-label="閉じる">✕</button></div>
+                <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="pop" title="チャットを別の窓で開く" aria-label="チャットを別の窓で開く" hidden>⧉</button><button class="close" aria-label="閉じる">✕</button></div>
                 <div class="notice" hidden></div>
                 <div class="msgs"></div>
                 <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
@@ -753,7 +776,7 @@ const WP_SHIM = (() => {
                 panel.style.bottom = '96px';
                 panel.style.height = 'auto';
                 panel.style.left = 'auto';
-                panel.style.width = '340px';
+                panel.style.width = '360px';
                 panel.dataset.place = 'side';
             } else if (r && r.height > 0 && room >= MIN_PANEL_PX) {
                 panel.style.top = `${viewTop + below + 8}px`;
@@ -919,6 +942,20 @@ const WP_SHIM = (() => {
         }
         q('.fab').addEventListener('click', () => setOpen(true));
         q('.close').addEventListener('click', () => { userClosed = true; setOpen(false); });
+        /*
+         * チャットを別の窓で開く（PC のゲスト。2026-09-14 ユーザー要望）。招待ページのチャットを小さな窓で開き、
+         * この画面のチャット欄は閉じて映像を全部見せる（💬 でいつでも戻せる）。
+         * 開く先は、招待ページが付けた版（&wph=）から作る自分たちのアドレスだけ
+         */
+        const popUrl = IS_DESKTOP ? U.hubUrl(target.hub) : null;
+        q('.pop').hidden = !popUrl;
+        q('.pop').addEventListener('click', () => {
+            if (!popUrl) return;
+            const w = window.open(`${popUrl}#wp=${target.room}&chat=1`, 'wp-chat', 'popup,width=420,height=760');
+            if (w) { try { w.opener = null; } catch { /* 無視 */ } }
+            userClosed = true;
+            setOpen(false);
+        });
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
             const input = q('input');
@@ -955,6 +992,20 @@ const WP_SHIM = (() => {
             render();
         }, 1000);
 
+        /*
+         * 「1回タップ」の知らせは、触ったら（PC はマウスを動かしたら）消す。そのまま Amazon の操作ボタンが出て、時間表示を読める。
+         * 出してから少し待ってから数える（出た瞬間の動きで消えないように）
+         */
+        let clockShownAt = 0;
+        let clockDismissed = false;
+        for (const type of IS_DESKTOP ? ['mousemove', 'pointerdown', 'keydown'] : ['pointerdown', 'touchstart']) {
+            window.addEventListener(type, () => {
+                if (!clockShownAt || clockDismissed || Date.now() - clockShownAt < 800) return;
+                clockDismissed = true;
+                q('.clock').hidden = true;
+            }, { capture: true, passive: true });
+        }
+
         /** 広告の入った動画なのに、画面の時間表示での答え合わせ（目印）がまだ無いか */
         function needsClock() {
             if (!planInfo || !Array.isArray(planInfo.lens) || !Array.isArray(planInfo.anchors)) return false;
@@ -974,12 +1025,28 @@ const WP_SHIM = (() => {
                 : !playerReady ? (Date.now() - openedAt > 10000
                     ? '動画が始まらないときは、画面の再生ボタンを押してください' : '動画が始まるのを待っています')
                 // 広告の入った動画で、まだ画面の時間表示で答え合わせできていない（操作ボタンを出してもらうと読める。2026-09-14）
-                : needsClock() ? '合わせています。画面を1回タップしてください（広告の時間を確かめます）'
+                : needsClock() ? (IS_DESKTOP ? '合わせています。マウスを画面の上で動かしてください（広告の時間を確かめます）'
+                    : '合わせています。画面を1回タップしてください（広告の時間を確かめます）')
                 : 'ホストに自動で合わせています';
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
             q('.hstate').style.color = connected && hasHost && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
+            const clock = connected && hasHost && !otherVideo && !hostHold && playerReady && needsClock() && !clockDismissed && q('.tap').hidden;
+            if (clock && q('.clock').hidden) {
+                q('.clock').textContent = IS_DESKTOP ? '🖱 マウスを画面の上で動かしてください' : '👆 画面を1回タップしてください';
+                const note = document.createElement('small');
+                note.textContent = '広告の時間を確かめて、ホストにぴったり合わせます（動かすと消えます）';
+                if (!IS_DESKTOP) note.textContent = '広告の時間を確かめて、ホストにぴったり合わせます（タップすると消えます）';
+                q('.clock').appendChild(note);
+                clockShownAt = Date.now();
+            }
+            q('.clock').hidden = !clock;
+            if (clock) {
+                const cv = layoutVideo();
+                const cr = cv ? contentRect(cv) : null;
+                q('.clock').style.top = cr && cr.height > 0 ? `${Math.round(cr.top + cr.height / 2)}px` : '40%';
+            }
             if (!q('.tap').hidden) {
                 // 見えている映像の真ん中へ（映像が見つからなければ画面の少し上）
                 const v = layoutVideo();
@@ -1298,7 +1365,9 @@ const WP_SHIM = (() => {
      */
     // 「広告 1:04」（PC）。間に「(1/2)」「・」などが挟まっても拾う。英語表示の「Ad 0:15」も。
     // 間に文字（「広告付きで視聴」など）が入るものは広告のカウントダウンとみなさない
-    const AD_COUNTDOWN = /(?:広告|\bAds?\b)[\s・·:：|()（）]*(?:\d+\s*(?:\/|of)\s*\d+[\s・·:：|()（）]*)?\d{1,2}:\d{2}/;
+    // 「広告の終了後に、引き続きビデオが再生されます」… 広告の位置を飛び越えてシークしたときに流れる広告の表示
+    // （残り時間が文の前に付く。2026-09-14 PC の Chrome で、これを見落として広告中に位置合わせを繰り返し、読み込みが終わらなくなった）
+    const AD_COUNTDOWN = /(?:広告|\bAds?\b)[\s・·:：|()（）]*(?:\d+\s*(?:\/|of)\s*\d+[\s・·:：|()（）]*)?\d{1,2}:\d{2}|広告の終了後に/;
     const AD_LABEL = /広告|^\s*Ads?\b/;
     const AD_TRACK_MS = 250;
     // 1回の計測でこれ以上進んだら、広告の再生ではなくシークによる移動とみなす（秒）
@@ -2427,7 +2496,14 @@ const WP_SHIM = (() => {
     let startup = false;         // プレイヤーが開いた直後か（STARTUP_*）
     let deferredStop = false;    // 開いた直後に「止まって待つ」を後回しにしたか
     let isHost = false;          // ui.js から教わる（このスクリプトは拡張機能の状態を直接見られない）
-    let lastTickDropReport = 0;  // 調査用（follow から抜けられない件）。記録の間引きに使う
+    let lastTickDropReport = 0;
+    /*
+     * 定期通知で位置を合わせた先と時刻（2026-09-14）。飛んだ先の読み込み中（まだ進んでいない）に次の通知で
+     * また先へ飛ばすと、読み込みが終わらずくるくる回ったままになった（PC の Chrome、ホストが先へ飛ばしたとき）。
+     * 飛ばした先から動き出すまでは、しばらく飛ばし直さない
+     */
+    let tickSeek = null;
+    const TICK_SEEK_SETTLE_MS = 15000;  // 調査用（follow から抜けられない件）。記録の間引きに使う
 
     function post(type, payload) {
         window.postMessage({ source: WP.SRC_BRIDGE, type, payload }, location.origin);
@@ -2602,9 +2678,16 @@ const WP_SHIM = (() => {
                 return;
             }
             const target = currentTime + lag;
+            const now = adapter.getCurrentTime();
+            if (tickSeek && Date.now() - tickSeek.at < TICK_SEEK_SETTLE_MS && Math.abs(now - tickSeek.to) < 0.5) {
+                // さっき飛ばした先で、まだ読み込み中。待つ（再生の指示だけは出す）
+                withEchoGuard(() => { if (adapter.isPaused()) adapter.play(); });
+                return;
+            }
             withEchoGuard(() => {
-                if (Math.abs(adapter.getCurrentTime() - target) > WP.DRIFT_THRESHOLD_SEC) {
+                if (Math.abs(now - target) > WP.DRIFT_THRESHOLD_SEC) {
                     adapter.seek(target);
+                    tickSeek = { at: Date.now(), to: adapter.getCurrentTime() };
                 }
                 if (adapter.isPaused()) adapter.play();
             });
