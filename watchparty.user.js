@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.16.1
+// @version      0.17.0
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -16,7 +16,7 @@
     'use strict';
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.16.1";
+    const __WP_VERSION__ = "0.17.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -81,6 +81,16 @@ const WP_US = (() => {
         if (!contentId) return null;
         const appId = typeof v.appId === 'string' && GTI_RE.test(v.appId) ? v.appId : null;
         return { service, contentId, appId };
+    }
+
+    /** Prime の広告の入る位置 { fullMs, breaks: [ms] }（サーバーから届いた数）を検査する。駄目なら null */
+    function cleanPlan(p) {
+        if (!p || typeof p !== 'object') return null;
+        const fullMs = p.fullMs;
+        if (typeof fullMs !== 'number' || !Number.isFinite(fullMs) || fullMs < 300000 || fullMs > MAX_SEC * 1000) return null;
+        if (!Array.isArray(p.breaks) || p.breaks.length > 40) return null;
+        const breaks = p.breaks.filter(ms => typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 && ms <= fullMs);
+        return { fullMs, breaks };
     }
 
     /** 秒として使える数か。駄目なら null */
@@ -256,7 +266,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, cleanVideo, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
+    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -344,6 +354,10 @@ const WP_SHIM = (() => {
         let hostHold = false;
         /** 動画（プレイヤー）を掴めたか。掴めるまでは「自動で合わせています」と出さない（Netflix のエラー画面でも出ていた） */
         let playerReady = false;
+        const openedAt = Date.now();
+        // 記録用: 広告の入る位置の換算のまとめ（bridge.js の STATUS）と、本編の時間（PLAYER_EVENT）
+        let planInfo = null;
+        let contentT = null;
 
         /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
         function sameTitle(v) {
@@ -367,6 +381,17 @@ const WP_SHIM = (() => {
             render();
         });
         socket.on('disconnect', () => { connected = false; render(); });
+
+        /*
+         * ホストが読んだ Prime の広告の入る位置（数だけ）を、同じ作品のときだけ bridge.js へ渡す（2026-09-14）。
+         * これで、まだ流れていない広告のぶんも換算してホストに合わせられる（adapters/prime.js の setAdPlan）
+         */
+        function sendPlan(m) {
+            if (PAGE_SERVICE !== 'prime' || !m.contentId) return;
+            const plan = U.cleanPlan(m.plan);
+            const v = U.cleanVideo(m.contentId && m.service ? m : { service: 'prime', contentId: m.contentId, appId: m.appId });
+            if (plan && v && sameTitle(v)) toBridge('PLAN', plan);
+        }
 
         /** ホストの作品がこのページと違うか確かめる。違えば合わせるのを止めて案内を出す */
         function checkTitle(raw) {
@@ -404,6 +429,7 @@ const WP_SHIM = (() => {
             if (sec === null) return;
             hostHold = s.hold === true;
             checkTitle(s);
+            sendPlan(s);
             hostPlaying = Boolean(s.isPlaying);
             if (!otherVideo && !hostHold) {
                 toBridge('APPLY', {
@@ -424,7 +450,9 @@ const WP_SHIM = (() => {
         socket.on('host-hold', () => { hostHold = true; render(); });
         // ホストの GTI はあとから届く。このページが GTI で開かれていて一致したら、同じ作品として合わせ直す
         socket.on('video-meta', (m) => {
-            if (!m || typeof m !== 'object' || !otherVideo || otherVideo.service !== 'prime') return;
+            if (!m || typeof m !== 'object') return;
+            sendPlan(m);
+            if (!otherVideo || otherVideo.service !== 'prime') return;
             if (m.contentId === otherVideo.contentId && typeof m.appId === 'string' && m.appId === target.contentId) {
                 otherVideo = null;
                 socket.emit('request-sync');
@@ -445,7 +473,10 @@ const WP_SHIM = (() => {
             } else if (d.type === 'STATUS') {
                 selfAd = Boolean(d.payload && d.payload.selfAd);
                 hostAd = Boolean(d.payload && d.payload.hostAd);
+                planInfo = d.payload && d.payload.plan && typeof d.payload.plan === 'object' ? d.payload.plan : null;
                 render();
+            } else if (d.type === 'PLAYER_EVENT' && d.payload && typeof d.payload.currentTime === 'number') {
+                contentT = d.payload.currentTime;   // 記録用（広告を除いた本編の時間）。サーバーへは送らない
             }
             // INFO / PLAYER_EVENT / DIAG / META は送らない（見ている側なので）
         });
@@ -634,11 +665,28 @@ const WP_SHIM = (() => {
         let adReports = 0;
         let lastAdKey = '';
         let lastAdAt = 0;
-        const openedAt = Date.now();
         function reportAds() {
             if (!connected || PAGE_SERVICE !== 'prime' || adReports >= 50) return;
             const vids = Array.from(document.querySelectorAll('video')).filter(v => Number.isFinite(v.duration) && v.duration >= 300);
-            if (!vids.length) return;
+            if (!vids.length) {
+                /*
+                 * 動画が始まらないときの記録（2026-09-14 実機: 作品を開いても動画を掴めない回が続いた）。
+                 * 画面に見えているボタンの短い文字（「今すぐ観る」「最初から再生」など）を15秒ごとに、5分まで送る。
+                 */
+                if (Date.now() - openedAt < 8000 || Date.now() - openedAt > 5 * 60 * 1000 || Date.now() - lastAdAt < 15000) return;
+                lastAdAt = Date.now();
+                adReports++;
+                const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+                    .filter(b => b.getBoundingClientRect().width > 0)
+                    .map(b => b.textContent.replace(/\s+/g, ' ').trim())
+                    .filter(s => s && s.length <= 20).slice(0, 6);
+                socket.emit('ad-report', {
+                    version: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '',
+                    novideo: true, videos: document.querySelectorAll('video').length,
+                    texts: buttons.map(s => ({ s, around: '' }))
+                });
+                return;
+            }
             const v = vids.reduce((a, b) => (b.duration > a.duration ? b : a));
             const texts = [];
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -665,7 +713,8 @@ const WP_SHIM = (() => {
             adReports++;
             socket.emit('ad-report', {
                 version: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '',
-                selfAd, texts, t: v.currentTime, d: v.duration, paused: v.paused
+                selfAd, texts, t: v.currentTime, d: v.duration, paused: v.paused,
+                ct: contentT, plan: planInfo
             });
         }
         if (PAGE_SERVICE === 'prime') setInterval(reportAds, 1000);
@@ -727,7 +776,8 @@ const WP_SHIM = (() => {
                 : otherVideo ? 'ホストが別の作品に変えました'
                 : selfAd ? '広告のあと、ホストに合わせます'
                 : hostAd ? 'ホストの広告が終わるのを待っています'
-                : !playerReady ? '動画が始まるのを待っています'
+                : !playerReady ? (Date.now() - openedAt > 10000
+                    ? '動画が始まらないときは、画面の再生ボタンを押してください' : '動画が始まるのを待っています')
                 : 'ホストに自動で合わせています';
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
@@ -824,6 +874,105 @@ const WP_SHIM = (() => {
     // 友達の画面の「🌐 ブラウザで見る」から開いたタブだけで動く。ふだんの Amazon には何もしない
     const target = WP_SHIM.readRoom();
     if (!target) return;
+    // ---- extension/content/prime-plan.js（広告の入る位置。読み込みが遅いので、あとの作品の分から読める）----
+    if (location.hostname !== 'www.netflix.com') {
+/**
+ * Prime の「広告の入る位置」を、プレイヤー自身が取りに行く再生情報から読む（2026-09-14）。
+ *
+ * ■ なぜ要るか（iPhone 実機の記録）
+ * Prime は広告を本編と同じ <video> に最初から差し込んでおく（まだ流れていない広告も含む）。
+ * 例: スパイダーマン 本編 7284 秒 → 広告つきの人の <video> は 7512.5 秒（広告 228 秒ぶん長い）。
+ * 広告のカウントダウンを見て測る方式では、まだ通っていない広告を知りようがなく、
+ * ホストが先へ移動するとゲストはその広告の長さぶん後ろにずれた。
+ *
+ * ■ 読むもの
+ * プレイヤーが取りに行く GetVodPlaybackResources の返事（JSON）の
+ *   vodPlaylistedPlaybackUrls.result.playbackUrls.fullTitleDurationMs … 本編の長さ（広告を含まない）
+ *   〃 .intraTitlePlaylist … [Remote(広告), Main(0〜3793664ms), Remote(広告), Main(3793664〜6395000ms)] のような並び
+ * Main の区切りは本編の時間なので、Remote（広告の枠）の位置が本編の時間で分かる。広告の長さはここには無いが、
+ * 「<video> の長さ − 本編の長さ」で広告の合計が分かる（adapters/prime.js）。
+ *
+ * ■ 決まり
+ * この返事以外は読まない・書き換えない。返事の中身も数（長さ・位置）しか取り出さない。
+ * ページより先に動く必要がある（document_start、ページと同じ文脈）。
+ */
+(() => {
+    if (globalThis.__wpPrimePlan) return;
+    const MIN_FULL_MS = 300 * 1000;          // これより短いのは予告編
+    const MAX_FULL_MS = 24 * 3600 * 1000;
+    const URL_RE = /\/playback\/prs\/GetVodPlaybackResources/;
+
+    /** 返事の JSON から { fullMs, breaks: [本編の時間 ms] } を取り出す。読めなければ null */
+    function parse(json) {
+        const p = json && json.vodPlaylistedPlaybackUrls && json.vodPlaylistedPlaybackUrls.result &&
+            json.vodPlaylistedPlaybackUrls.result.playbackUrls;
+        if (!p || typeof p !== 'object') return null;
+        const fullMs = Number(p.fullTitleDurationMs);
+        if (!Number.isFinite(fullMs) || fullMs < MIN_FULL_MS || fullMs > MAX_FULL_MS) return null;
+        const list = Array.isArray(p.intraTitlePlaylist) ? p.intraTitlePlaylist : [];
+        const breaks = [];
+        let cursor = 0;
+        for (const e of list) {
+            if (!e || typeof e !== 'object') continue;
+            if (e.type === 'Main') {
+                if (Number.isFinite(e.endMs)) cursor = e.endMs;
+            } else if (e.type === 'Remote') {
+                if (!breaks.includes(cursor)) breaks.push(cursor);
+            }
+        }
+        return { fullMs, breaks: breaks.filter(ms => ms >= 0 && ms <= fullMs).sort((a, b) => a - b).slice(0, 40) };
+    }
+
+    let last = null;
+    const post = () => window.postMessage({ source: 'wp-plan', plan: last }, location.origin);
+    const handleText = (text) => {
+        try {
+            const plan = parse(JSON.parse(text));
+            if (plan) { last = plan; post(); }
+        } catch { /* JSON でない */ }
+    };
+
+    const origFetch = window.fetch;
+    if (typeof origFetch === 'function') {
+        window.fetch = function (input) {
+            const res = Reflect.apply(origFetch, globalThis, arguments);
+            try {
+                const url = typeof input === 'string' ? input : input && input.url;
+                if (URL_RE.test(String(url || ''))) {
+                    res.then(r => r.clone().text()).then(handleText).catch(() => {});
+                }
+            } catch { /* 読めなくてもページの通信は邪魔しない */ }
+            return res;
+        };
+    }
+
+    const XHR = globalThis.XMLHttpRequest && XMLHttpRequest.prototype;
+    if (XHR) {
+        const open = XHR.open;
+        XHR.open = function (method, url) {
+            try {
+                if (URL_RE.test(String(url || ''))) {
+                    this.addEventListener('load', () => {
+                        try {
+                            if (this.responseType === '' || this.responseType === 'text') handleText(this.responseText);
+                            else if (this.responseType === 'json') handleText(JSON.stringify(this.response));
+                        } catch { /* 無視 */ }
+                    });
+                }
+            } catch { /* 無視 */ }
+            return Reflect.apply(open, this, arguments);
+        };
+    }
+
+    // あとから動き出した bridge.js が、読めた分を取りに来る
+    window.addEventListener('message', (ev) => {
+        if (ev.source === window && ev.data && ev.data.source === 'wp-plan-req' && last) post();
+    });
+
+    Object.defineProperty(globalThis, '__wpPrimePlan', { value: { parse }, configurable: false });
+})();
+
+    }
     WP_SHIM.start(target);
 
     // ---- extension/adapters/base.js ----
@@ -1065,7 +1214,7 @@ const WP_SHIM = (() => {
             if (this._detach) this._detach();
 
             this._video = video;
-            // 別の <video> になったら時間の数え方も始め直し
+            // 別の <video> になったら時間の数え方も始め直し（プランは作品ごとなので、ここでは消さない）
             this._ads = [];
             this._adOpen = null;
 
@@ -1189,8 +1338,55 @@ const WP_SHIM = (() => {
             }, AD_TRACK_MS);
         }
 
+        /*
+         * 広告の入る位置（content/prime-plan.js が再生情報から読んだもの。2026-09-14）。
+         * Prime は広告を最初から <video> に差し込んでおくので、まだ流れていない広告も <video> の時間に入っている。
+         * 位置が分かっていれば、広告の合計（<video> の長さ − 本編の長さ）を枠に割り振って換算できる。
+         *   - 流れた広告は実際に測った長さを使う（_ads）
+         *   - まだ流れていない枠には、残りを等分する（枠が1つなら正確）
+         * own … このページ自身で読んだもの（ホストから届いたものより優先する）
+         */
+        setAdPlan(plan, own = false) {
+            if (!plan || typeof plan !== 'object') return;
+            const fullMs = Number(plan.fullMs);
+            if (!Number.isFinite(fullMs) || fullMs < 300000 || !Array.isArray(plan.breaks)) return;
+            if (this._plan && this._plan.own && !own) return;
+            const breaks = plan.breaks.map(Number).filter(ms => Number.isFinite(ms) && ms >= 0 && ms <= fullMs)
+                .sort((a, b) => a - b).slice(0, 40).map(ms => ms / 1000);
+            this._plan = { fullSec: fullMs / 1000, breaks, own };
+        }
+
+        /** 枠ごとの広告の長さ（秒）。使えないときは null */
+        _planLens() {
+            const plan = this._plan, v = this._video;
+            if (!plan || !v || !Number.isFinite(v.duration)) return null;
+            const total = v.duration - plan.fullSec;
+            // 本編の長さと合わない（別の作品のプランなど）なら使わない
+            if (total < -5 || total > 1800) return null;
+            if (total < 1 || plan.breaks.length === 0) return plan.breaks.map(() => 0);
+            const measured = plan.breaks.map(pos => {
+                const ad = this._ads.find(a => Math.abs(a.contentPos - pos) < 5);
+                return ad ? ad.len : null;
+            });
+            const known = measured.reduce((s, l) => s + (l || 0), 0);
+            const unknown = measured.filter(l => l === null).length;
+            const each = unknown ? Math.max(0, (total - known) / unknown) : 0;
+            return measured.map(l => (l === null ? each : l));
+        }
+
         /** <video> の時間 → 本編の時間 */
         _toContent(elem) {
+            const lens = this._planLens();
+            if (lens) {
+                let off = 0;
+                for (let i = 0; i < lens.length; i++) {
+                    const start = this._plan.breaks[i] + off;
+                    if (elem < start) return Math.max(0, elem - off);
+                    if (elem < start + lens[i]) return this._plan.breaks[i];   // 広告の途中。本編は止まっている
+                    off += lens[i];
+                }
+                return Math.max(0, elem - off);
+            }
             let offset = 0;
             for (const ad of this._ads) {
                 if (elem >= ad.elemEnd) offset += ad.len;
@@ -1202,11 +1398,29 @@ const WP_SHIM = (() => {
 
         /** 本編の時間 → <video> の時間（その位置より前の広告の分だけ後ろにずらす） */
         _toElem(content) {
+            const lens = this._planLens();
+            if (lens) {
+                // その位置より前（同じ位置を含む）の枠の広告を足す。枠の位置ちょうどなら広告の後ろへ
+                let off = 0;
+                for (let i = 0; i < lens.length; i++) if (this._plan.breaks[i] <= content + 0.5) off += lens[i];
+                return content + off;
+            }
             let offset = 0;
             for (const ad of this._ads) {
                 if (ad.contentPos <= content) offset += ad.len;
             }
             return content + offset;
+        }
+
+        /** 記録用の短いまとめ（本編の長さ・枠の位置・割り振った長さ） */
+        planSummary() {
+            if (!this._plan) return null;
+            const lens = this._planLens();
+            return {
+                full: Math.round(this._plan.fullSec), own: this._plan.own,
+                breaks: this._plan.breaks.map(s => Math.round(s)),
+                lens: lens ? lens.map(l => Math.round(l * 10) / 10) : null
+            };
         }
 
         describeForDiag() {
@@ -1215,6 +1429,7 @@ const WP_SHIM = (() => {
                 countdown: this._adCountdown(),
                 elemTime: main ? Math.round(main.currentTime * 10) / 10 : null,
                 contentTime: main ? Math.round(this.getCurrentTime() * 10) / 10 : null,
+                plan: this.planSummary(),
                 ads: this._ads.map(a => ({
                     elemStart: Math.round(a.elemStart * 10) / 10,
                     len: Math.round(a.len * 10) / 10,
@@ -2175,6 +2390,7 @@ const WP_SHIM = (() => {
         } else if (data.type === 'ROLE') {
             const becameHost = !isHost && Boolean(data.payload && data.payload.isHost);
             isHost = Boolean(data.payload && data.payload.isHost);
+            if (becameHost) usePlan();   // ホストになったら、読めていた広告の位置をゲストへ送る
             if (becameHost && adapter) {
                 // ゲストとして止めた直後だと、ホストとして押した再生が「勝手な再開」とみなされ
                 // 止め直されてしまう（テストで発生）。合わせ込みの途中の状態を全部やめる
@@ -2185,8 +2401,38 @@ const WP_SHIM = (() => {
             }
         } else if (data.type === 'REQUEST_INFO') {
             sendInfo();
+        } else if (data.type === 'PLAN') {
+            // ホストが読んだ広告の入る位置（同じ作品と確かめてから届く）。自分で読めたものがあればそちらを使う
+            if (adapter && typeof adapter.setAdPlan === 'function') {
+                adapter.setAdPlan(data.payload, false);
+                postStatus();
+            }
         }
     });
+
+    /*
+     * このページ自身で読んだ広告の入る位置（content/prime-plan.js）。ホストなら別便でゲストへも送る
+     * （スマホのスクリプトは読み込みが遅く、自分では読み逃すことがあるため）。
+     */
+    let ownPlan = null;
+    let ownPlanAt = 0;
+    let ownPlanUrl = '';
+    window.addEventListener('message', (ev) => {
+        if (ev.source !== window || !ev.data || ev.data.source !== 'wp-plan') return;
+        ownPlan = ev.data.plan;
+        ownPlanAt = Date.now();
+        ownPlanUrl = location.href;
+        usePlan();
+    });
+    function usePlan() {
+        if (!ownPlan || !adapter || typeof adapter.setAdPlan !== 'function') return;
+        const contentId = adapter.getContentId(location.href);
+        // 読んだあとに別の作品へ移っていたら使わない（Prime は再生を始めると同じ作品のまま URL を書き換えるので、少しの間は許す）
+        if (contentId !== adapter.getContentId(ownPlanUrl) && Date.now() - ownPlanAt > 20000) return;
+        adapter.setAdPlan(ownPlan, true);
+        postStatus();
+        if (isTop && isHost && contentId) post('META', { contentId, plan: ownPlan });
+    }
 
     function pageInfo() {
         const contentId = adapter.getContentId(location.href);
@@ -2274,7 +2520,10 @@ const WP_SHIM = (() => {
     }
 
     function postStatus() {
-        post('STATUS', { selfAd, hostAd, hostPaused });
+        post('STATUS', {
+            selfAd, hostAd, hostPaused,
+            plan: adapter && typeof adapter.planSummary === 'function' ? adapter.planSummary() : null
+        });
     }
 
     function setHostState(next) {
@@ -2332,10 +2581,14 @@ const WP_SHIM = (() => {
             const dur = adapter.getDuration();
             const t = adapter.getCurrentTime();
             if (!Number.isFinite(dur) || dur <= 0 || !Number.isFinite(t)) return;
-            const lengthChanged = Number.isFinite(lastDur) && Math.abs(dur - lastDur) > 30;
+            /*
+             * 長さの変化では判定しない（2026-09-14 実機）: Prime は広告の差し込みやページの移動で長さが変わり、
+             * 作品を送った直後に「作品が変わった」と誤判定してゲストを待たせ続けた。
+             * 次の話の自動再生は「終わり近くから冒頭へ戻った」で見る。別の作品のページへの移動はアドレスの変化で分かる
+             */
             const restarted = Number.isFinite(lastT) && Number.isFinite(lastDur) && lastDur > 300 &&
                 lastT > lastDur - 90 && t < 30;
-            if (lengthChanged || restarted) {
+            if (restarted) {
                 post('DIAG', { event: 'title-changed', url: location.href, lastDur, dur, lastT, t });
                 post('TITLE_CHANGED', pageInfo());
             }
@@ -2376,6 +2629,8 @@ const WP_SHIM = (() => {
     async function start() {
         adapter = globalThis.WPAdapters.resolve(location.href);
         if (!adapter) return;
+        // 先に動いていた content/prime-plan.js が読めた分を取りに行く
+        window.postMessage({ source: 'wp-plan-req' }, location.origin);
 
         // 作品の特定はプレイヤーを待たずに済ませる
         sendInfo();
