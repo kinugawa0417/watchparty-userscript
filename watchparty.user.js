@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.17.0
+// @version      0.18.0
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -16,7 +16,7 @@
     'use strict';
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.17.0";
+    const __WP_VERSION__ = "0.18.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -252,7 +252,9 @@ const WP_US = (() => {
         row.className = 'msg' + (m.senderId === me ? ' me' : '') + (isReaction(content) ? ' big' : '');
         const who = document.createElement('span');
         who.className = 'name';
-        who.textContent = typeof m.username === 'string' ? m.username.slice(0, 20) : '？';
+        // ホストの発言（サーバーの判定）だけ 👑。名前に入った王冠の記号は消す（チャットでホストになりすませないように。2026-09-14）
+        const plain = (typeof m.username === 'string' ? m.username : '').replace(/[👑♔♕♚♛🪅]/gu, '').slice(0, 20) || '？';
+        who.textContent = m.isHost === true ? '👑 ' + plain : plain;
         who.style.color = safeColor(m.color);
         const body = document.createElement('span');
         body.className = 'body';
@@ -676,14 +678,26 @@ const WP_SHIM = (() => {
                 if (Date.now() - openedAt < 8000 || Date.now() - openedAt > 5 * 60 * 1000 || Date.now() - lastAdAt < 15000) return;
                 lastAdAt = Date.now();
                 adReports++;
-                const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-                    .filter(b => b.getBoundingClientRect().width > 0)
-                    .map(b => b.textContent.replace(/\s+/g, ' ').trim())
-                    .filter(s => s && s.length <= 20).slice(0, 6);
+                // 画面上部のメニューではなく、再生・許可・エラーに関係する文言を拾う（2026-09-14 Android で原因が分からなかった）
+                const KEY = /観る|再生|続き|最初|許可|サポート|対応|エラー|ブラウザ|保護|DRM|有効|問題|できません|Play|Error/i;
+                const texts = [];
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                while (walker.nextNode() && texts.length < 6) {
+                    const s = walker.currentNode.textContent.replace(/\s+/g, ' ').trim();
+                    if (!s || s.length > 40 || !KEY.test(s) || texts.some(t => t.s === s)) continue;
+                    const el = walker.currentNode.parentElement;
+                    if (!el || el.getBoundingClientRect().width === 0) continue;
+                    texts.push({ s, around: '' });
+                }
+                // 動画の部品の読み込み状態（長さ・readyState・networkState・エラー番号）
+                const vs = Array.from(document.querySelectorAll('video')).slice(0, 3).map(x => ({
+                    s: `d=${Number.isFinite(x.duration) ? Math.round(x.duration) : 'NaN'} rs=${x.readyState} ns=${x.networkState} err=${x.error ? x.error.code : 0} w=${Math.round(x.getBoundingClientRect().width)}`,
+                    around: ''
+                }));
                 socket.emit('ad-report', {
                     version: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '',
                     novideo: true, videos: document.querySelectorAll('video').length,
-                    texts: buttons.map(s => ({ s, around: '' }))
+                    texts: [...vs, ...texts].slice(0, 6)
                 });
                 return;
             }
@@ -1184,6 +1198,9 @@ const WP_SHIM = (() => {
             this._adOpen = null;        // 流れている広告 { elemStart, len, contentPos, lastElem }
             this._adEl = null;          // 見つけたカウントダウン表示（毎回ページを探すと重いので覚える）
             this._adTimer = null;
+            this._anchors = [];         // 画面の時間表示で確かめた { content: 本編の秒, offset: そこまでの広告の合計 }
+            this._clock = null;
+            this._clockTick = 0;
         }
 
         async ready() {
@@ -1316,6 +1333,7 @@ const WP_SHIM = (() => {
                 if (!v) return;
                 const elem = v.currentTime;
                 const inAd = this.isInAd();
+                if (this._plan && ++this._clockTick % 4 === 0) this._readClock();   // 1秒ごと
 
                 if (inAd && !this._adOpen) {
                     this._adOpen = { elemStart: elem, len: 0, contentPos: this._toContent(elem), lastElem: elem };
@@ -1350,10 +1368,70 @@ const WP_SHIM = (() => {
             if (!plan || typeof plan !== 'object') return;
             const fullMs = Number(plan.fullMs);
             if (!Number.isFinite(fullMs) || fullMs < 300000 || !Array.isArray(plan.breaks)) return;
-            if (this._plan && this._plan.own && !own) return;
+            if (this._plan && this._plan.own && !own && Math.abs(this._plan.fullSec - fullMs / 1000) < 1) return;
             const breaks = plan.breaks.map(Number).filter(ms => Number.isFinite(ms) && ms >= 0 && ms <= fullMs)
                 .sort((a, b) => a - b).slice(0, 40).map(ms => ms / 1000);
+            // 別の作品のプランになったら、画面の時間表示で確かめた目印も捨てる
+            if (!this._plan || Math.abs(this._plan.fullSec - fullMs / 1000) >= 1) {
+                this._anchors = [];
+                this._clock = null;
+                this._clockPrev = null;
+            }
             this._plan = { fullSec: fullMs / 1000, breaks, own };
+        }
+
+        /*
+         * 画面の時間表示で答え合わせする（2026-09-14 iPhone 実機）。
+         * 等分だけでは外れた: 枠は冒頭・33分・103分、広告の合計 47 秒を 15.7 秒ずつ割り振ったが、
+         * 実際は冒頭に広告が無く（動画の 18.8 秒で画面は「0:00:19」）、ゲストが 16 秒先へずれた。
+         * 操作ボタンが出ている間は「経過 0:00:19」「残り 2:07:47」が見え、足すと本編の長さになる。
+         * これで本物の本編の時間を読み、「その位置までの広告の合計 = <video> の時間 − 本編の時間」を目印（_anchors）に残す。
+         */
+        _readClock() {
+            const plan = this._plan, v = this._video;
+            if (!plan || !v || v.seeking || v.paused || this.isInAd()) return;
+            const parse = (s) => {
+                const m = /^(?:(\d{1,2}):)?(\d{1,2}):(\d{2})$/.exec(s);
+                return m ? (Number(m[1] || 0) * 3600 + Number(m[2]) * 60 + Number(m[3])) : null;
+            };
+            const visible = (n) => n.parentElement && n.parentElement.getBoundingClientRect().width > 0;
+            let pair = null;
+            // 前回見つけた表示がまだあればそれを読む（毎回ページ全体を探すと重い）
+            if (this._clock && this._clock.every(n => n.isConnected && visible(n))) {
+                pair = this._clock;
+            } else {
+                if (Date.now() - (this._clockScanAt || 0) < 3000) return;
+                this._clockScanAt = Date.now();
+                const found = [];
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                while (walker.nextNode() && found.length < 8) {
+                    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(walker.currentNode.textContent.trim()) && visible(walker.currentNode)) {
+                        found.push(walker.currentNode);
+                    }
+                }
+                for (let i = 0; i + 1 < found.length && !pair; i++) {
+                    const a = parse(found[i].textContent.trim()), b = parse(found[i + 1].textContent.trim());
+                    if (a !== null && b !== null && Math.abs(a + b - plan.fullSec) <= 3) pair = [found[i], found[i + 1]];
+                }
+                this._clock = pair;
+            }
+            if (!pair) return;
+            const content = parse(pair[0].textContent.trim());
+            const rest = parse(pair[1].textContent.trim());
+            if (content === null || rest === null || Math.abs(content + rest - plan.fullSec) > 3) return;
+            // 表示が遅れて古いことがある（実機で 6 秒遅れの表示を見た）。続けて読んで、動画と同じだけ進んでいるときだけ使う
+            const prev = this._clockPrev;
+            this._clockPrev = { content, elem: v.currentTime, at: Date.now() };
+            if (!prev || Date.now() - prev.at > 2500 || content === prev.content ||
+                Math.abs((content - prev.content) - (v.currentTime - prev.elem)) > 1.2) return;
+            // 表示は秒の切り捨てなので、半秒足した所を本編の時間とみなす
+            const offset = v.currentTime - (content + 0.5);
+            const total = v.duration - plan.fullSec;
+            if (offset < -2 || offset > total + 2) return;
+            this._anchors = (this._anchors || []).filter(a => Math.abs(a.content - content) > 30);
+            this._anchors.push({ content, offset: Math.max(0, Math.min(total, offset)) });
+            this._anchors.sort((a, b) => a.content - b.content);
+            if (this._anchors.length > 20) this._anchors.shift();
         }
 
         /** 枠ごとの広告の長さ（秒）。使えないときは null */
@@ -1363,15 +1441,33 @@ const WP_SHIM = (() => {
             const total = v.duration - plan.fullSec;
             // 本編の長さと合わない（別の作品のプランなど）なら使わない
             if (total < -5 || total > 1800) return null;
-            if (total < 1 || plan.breaks.length === 0) return plan.breaks.map(() => 0);
-            const measured = plan.breaks.map(pos => {
+            const n = plan.breaks.length;
+            if (total < 1 || n === 0) return plan.breaks.map(() => 0);
+            // 流れた広告は測った長さ
+            const lens = plan.breaks.map(pos => {
                 const ad = this._ads.find(a => Math.abs(a.contentPos - pos) < 5);
                 return ad ? ad.len : null;
             });
-            const known = measured.reduce((s, l) => s + (l || 0), 0);
-            const unknown = measured.filter(l => l === null).length;
-            const each = unknown ? Math.max(0, (total - known) / unknown) : 0;
-            return measured.map(l => (l === null ? each : l));
+            /*
+             * 目印ごとに、「その位置より前の枠の広告の合計」が分かっている。
+             * 前の目印からこの目印までの間の、まだ長さの分からない枠に、足りない分を等分する
+             */
+            let done = 0;   // ここまでで決まった枠の数
+            const sumTo = (k) => lens.slice(0, k).reduce((s, l) => s + (l || 0), 0);
+            for (const a of this._anchors || []) {
+                let k = done;
+                while (k < n && plan.breaks[k] <= a.content) k++;
+                if (k === done) continue;
+                const unknown = [];
+                for (let i = done; i < k; i++) if (lens[i] === null) unknown.push(i);
+                const need = a.offset - sumTo(k);
+                for (const i of unknown) lens[i] = Math.max(0, need / unknown.length);
+                done = k;
+            }
+            // 残り（最後の目印より後）には、合計から決まった分を引いた残りを等分する
+            const unknown = lens.map((l, i) => (l === null ? i : -1)).filter(i => i >= 0);
+            const each = unknown.length ? Math.max(0, (total - sumTo(n)) / unknown.length) : 0;
+            return lens.map(l => (l === null ? each : l));
         }
 
         /** <video> の時間 → 本編の時間 */
@@ -1419,6 +1515,7 @@ const WP_SHIM = (() => {
             return {
                 full: Math.round(this._plan.fullSec), own: this._plan.own,
                 breaks: this._plan.breaks.map(s => Math.round(s)),
+                anchors: (this._anchors || []).map(a => [Math.round(a.content), Math.round(a.offset * 10) / 10]),
                 lens: lens ? lens.map(l => Math.round(l * 10) / 10) : null
             };
         }
@@ -2512,6 +2609,8 @@ const WP_SHIM = (() => {
             ad: adapter.isInAd(),
             timestamp: Date.now()
         });
+        // 広告の入る位置の換算（画面の時間表示で確かめた目印）は黙って変わるので、定期的にも知らせる（記録用）
+        if (typeof adapter.planSummary === 'function' && adapter.planSummary()) postStatus();
     }
 
     function startHeartbeat() {
