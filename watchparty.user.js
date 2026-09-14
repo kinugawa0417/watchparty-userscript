@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.21.1
+// @version      0.22.0
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.21.1";
+    const __WP_VERSION__ = "0.22.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -84,8 +84,6 @@ const WP_US = (() => {
     // Android の準備で開く、決まったアドレス
     const FIREFOX_PLAY_URL = 'https://play.google.com/store/apps/details?id=org.mozilla.firefox';
     const VIOLENTMONKEY_URL = 'https://addons.mozilla.org/ja/android/addon/violentmonkey/';
-    // Prime Video アプリ（Android）。入れるだけで使わない（無いと Amazon のページが Google Play へ回す。2026-09-14）
-    const PRIME_VIDEO_PLAY_URL = 'https://play.google.com/store/apps/details?id=com.amazon.avod.thirdpartyclient';
 
     /** サーバーから届いた作品情報を検査して、使える形だけ返す。駄目なら null */
     function cleanVideo(v) {
@@ -208,9 +206,10 @@ const WP_US = (() => {
          * チャットを出してホストに自動で合わせる。時刻は付けない（合わせるのはスクリプトの仕事）。
          * ログインしていないと Netflix は別のページへ回し、そのとき ?wp= は消える。# の後ろは回されても残るので両方に付ける。
          */
-        netflixWeb(v, room, name, android) {
+        netflixWeb(v, room, name, android, script) {
             if (v.service !== 'netflix') return null;
-            const q = `wp=${enc(room)}&wpn=${enc(name)}`;
+            // PC のブラウザで見る形（2026-09-14）。iPhone の Safari は Netflix が再生できないので、PC だけで使う
+            const q = `wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
             const path = `www.netflix.com/watch/${enc(v.contentId)}?${q}#${q}`;
             return android ? urls.firefox(`https://${path}`) : `https://${path}`;
         },
@@ -288,7 +287,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, messageKey, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL, PRIME_VIDEO_PLAY_URL };
+    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, messageKey, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -319,6 +318,9 @@ const WP_SHIM = (() => {
     const KEY = 'wp:userscript';
     const PLAY_BLOCKED_MS = 3000;
     const IS_ANDROID = /Android/i.test(navigator.userAgent);
+    // PC（Windows / Mac）。iPad は Mac を名乗るので、指で触れる画面かで除く（2026-09-14 PC のゲスト用）
+    const IS_DESKTOP = !IS_ANDROID && !/iPhone|iPad|iPod/i.test(navigator.userAgent) &&
+        !(/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
     // 作品ページのアドレス。amazon.co.jp の /gp/video/detail/ID と、primevideo.com の /detail/ID（GTI は - を含む）
     const AMAZON_DETAIL = /\/(?:gp\/video\/)?detail\/([A-Za-z0-9.-]{10,80})(?=[/?#]|$)/;
     const SYNC_TYPES = new Set(['play', 'pause', 'seek', 'tick']);
@@ -704,16 +706,29 @@ const WP_SHIM = (() => {
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
-            if (r && r.height > 0 && room >= MIN_PANEL_PX) {
+            if (IS_DESKTOP && window.innerWidth >= 700) {
+                /*
+                 * PC の横長の画面では、チャット欄を右側に縦長で置く（2026-09-14）。下に重ねると映像と操作ボタンを隠すため。
+                 * 上はプレイヤーの戻るボタン、下は再生バーと重ならないよう、少し空ける
+                 */
+                panel.style.top = '72px';
+                panel.style.bottom = '96px';
+                panel.style.height = 'auto';
+                panel.style.left = 'auto';
+                panel.style.width = '340px';
+                panel.dataset.place = 'side';
+            } else if (r && r.height > 0 && room >= MIN_PANEL_PX) {
                 panel.style.top = `${viewTop + below + 8}px`;
                 panel.style.bottom = 'auto';
                 panel.style.height = `${room}px`;
                 panel.dataset.place = 'below-video';
+                panel.style.left = ''; panel.style.width = '';
             } else {
                 panel.style.top = 'auto';
                 panel.style.bottom = `${Math.max(8, window.innerHeight - viewTop - viewH + 8)}px`;
                 panel.style.height = `${Math.round(Math.min(viewH * 0.45, 420))}px`;
                 panel.dataset.place = 'overlay';
+                panel.style.left = ''; panel.style.width = '';
             }
             reportLayout(video, r, panel);
         }
