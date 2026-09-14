@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.22.0
+// @version      0.23.0
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.22.0";
+    const __WP_VERSION__ = "0.23.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -282,12 +282,23 @@ const WP_US = (() => {
         return row;
     }
 
+    /** 入退出などのお知らせは、チャットの流れに混ぜず、この1行を上書きして出す（2026-09-14 ユーザー要望）。文字は textContent でしか入れない */
+    function showNotice(el, content) {
+        if (!el) return;
+        el.textContent = typeof content === 'string' ? content.slice(0, 200) : '';
+        el.title = el.textContent;
+        el.hidden = !el.textContent;
+        el.classList.remove('fresh');
+        void el.offsetWidth;   // 同じ知らせが続いても、もう一度光らせる
+        el.classList.add('fresh');
+    }
+
     /** サーバーへつなぐ（socket.io はこのスクリプトの中に入れてある） */
     function connect() {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, messageKey, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
+    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, safeColor, isReaction, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -373,6 +384,8 @@ const WP_SHIM = (() => {
         let hostAd = false;
         let connected = false;
         let me = null;
+        /** ルームにホストがいるか（2026-09-14）。ホストの接続が切れたら、合わせるのをやめて今のまま再生を続ける。戻れば元どおり */
+        let hasHost = true;
         /** ホストが別の作品に変えたときの、その作品（cleanVideo 済み）。同じ作品なら null */
         let otherVideo = null;
         /** ホストの作品が変わって、まだ送られていない（2026-09-14）。送られるまで合わせない */
@@ -406,6 +419,15 @@ const WP_SHIM = (() => {
             render();
         });
         socket.on('disconnect', () => { connected = false; render(); });
+        socket.on('update-participants', (list) => {
+            if (!Array.isArray(list)) return;
+            const now = list.some(u => u && u.isHost === true);
+            if (!now) { hostPlaying = false; hostAd = false; }
+            // ホストが戻ってきたら、ホストの今の位置を取り直す
+            if (now && !hasHost && connected) socket.emit('request-sync');
+            hasHost = now;
+            render();
+        });
 
         /*
          * ホストが読んだ Prime の広告の入る位置（数だけ）を、同じ作品のときだけ bridge.js へ渡す（2026-09-14）。
@@ -577,6 +599,17 @@ const WP_SHIM = (() => {
                          max-width: 420px; margin-left: auto; height: min(52vh, 420px);
                          pointer-events: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px;
                          background: rgba(15,15,19,.94); color: #f2f2f4; border: 1px solid #2c2c36; border-radius: 12px; }
+                /*
+                 * 映像の上に重なる置き方（PC の右側・スマホの重ね置き）は、ほぼ透明にして映像を見やすくする（2026-09-14 ユーザー要望）。
+                 * 字は影を付けて、明るい場面でも読めるようにする。映像の下に置くときは重ならないので、今までどおり。
+                 */
+                .panel[data-place="side"], .panel[data-place="overlay"] {
+                         background: rgba(0,0,0,.18); border-color: rgba(255,255,255,.12);
+                         text-shadow: 0 0 3px #000, 0 1px 2px #000, 0 0 6px rgba(0,0,0,.8); }
+                .panel[data-place="side"] .msg.system, .panel[data-place="overlay"] .msg.system { color: #d0d0d8; }
+                .panel[data-place="side"] .phead, .panel[data-place="overlay"] .phead { color: #e0e0e6; }
+                .panel[data-place="side"] input, .panel[data-place="overlay"] input { background: rgba(20,20,26,.55); border-color: rgba(255,255,255,.2); }
+                .panel[data-place="side"] .close, .panel[data-place="overlay"] .close { background: rgba(58,58,70,.6); }
                 .phead { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9a9aa6; }
                 .phead span { flex: 1; }
                 .close { border: 0; border-radius: 8px; background: #3a3a46; color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; }
@@ -588,6 +621,11 @@ const WP_SHIM = (() => {
                 .msg .name { font-weight: 700; margin-right: 6px; }
                 .msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
                 .msg.system { color: #9a9aa6; font-size: 12px; text-align: center; }
+                /* 入退出などのお知らせは、チャットの流れに混ぜず、この1行を上書きして出す（2026-09-14 ユーザー要望） */
+                .notice { flex: none; font-size: 12px; line-height: 1.5; color: #ffd98a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                          padding: 2px 8px; border-radius: 6px; background: rgba(255,255,255,.08); }
+                .notice.fresh { animation: wpfresh 1.2s ease-out; }
+                @keyframes wpfresh { from { background: rgba(255,204,51,.45); } to { background: rgba(255,255,255,.08); } }
                 .msg.big .body { font-size: 24px; line-height: 1.2; }
                 form { display: flex; gap: 6px; }
                 input { flex: 1; min-width: 0; font-size: 16px; padding: 10px; border-radius: 8px;
@@ -610,6 +648,7 @@ const WP_SHIM = (() => {
             <button class="fab">💬<span class="badge" hidden></span></button>
             <div class="panel" hidden>
                 <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="close" aria-label="閉じる">✕</button></div>
+                <div class="notice" hidden></div>
                 <div class="msgs"></div>
                 <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
             </div>`;
@@ -866,6 +905,7 @@ const WP_SHIM = (() => {
         const shownMsgs = new Set();
         /** quiet … 入る前の発言（chat-history）。未読の数には数えない */
         function addMessage(m, quiet = false) {
+            if (m.type === 'system') { U.showNotice(q('.notice'), m.content); return; }
             const key = U.messageKey(m);
             if (key) { if (shownMsgs.has(key)) return; shownMsgs.add(key); }
             const box = q('.msgs');
@@ -927,6 +967,7 @@ const WP_SHIM = (() => {
             q('.dot').className = 'dot' + (connected ? ' on' : '');
             q('.text').textContent =
                 !connected ? 'Watch Party つないでいます…'
+                : !hasHost ? 'ホストの接続が切れました（戻るまで、このまま再生します）'
                 : hostHold ? 'ホストが次の作品を選んでいます'
                 : otherVideo ? 'ホストが別の作品に変えました'
                 : selfAd ? '広告のあと、ホストに合わせます'
@@ -938,7 +979,7 @@ const WP_SHIM = (() => {
                 : 'ホストに自動で合わせています';
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
-            q('.hstate').style.color = connected && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
+            q('.hstate').style.color = connected && hasHost && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
             if (!q('.tap').hidden) {
                 // 見えている映像の真ん中へ（映像が見つからなければ画面の少し上）
