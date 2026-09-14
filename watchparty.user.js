@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.23.2
+// @version      0.23.3
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.23.2";
+    const __WP_VERSION__ = "0.23.3";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -404,6 +404,7 @@ const WP_SHIM = (() => {
         const openedAt = Date.now();
         // 記録用: 広告の入る位置の換算のまとめ（bridge.js の STATUS）と、本編の時間（PLAYER_EVENT）
         let planInfo = null;
+        let playDiag = null;
         let contentT = null;
 
         /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
@@ -557,6 +558,7 @@ const WP_SHIM = (() => {
                 selfAd = Boolean(d.payload && d.payload.selfAd);
                 hostAd = Boolean(d.payload && d.payload.hostAd);
                 planInfo = d.payload && d.payload.plan && typeof d.payload.plan === 'object' ? d.payload.plan : null;
+                playDiag = d.payload && d.payload.diag && typeof d.payload.diag === 'object' ? d.payload.diag : null;
                 render();
             } else if (d.type === 'PLAYER_EVENT' && d.payload && typeof d.payload.currentTime === 'number') {
                 contentT = d.payload.currentTime;   // 記録用（広告を除いた本編の時間）。サーバーへは送らない
@@ -850,7 +852,7 @@ const WP_SHIM = (() => {
         let lastAdKey = '';
         let lastAdAt = 0;
         function reportAds() {
-            if (!connected || PAGE_SERVICE !== 'prime' || adReports >= 50) return;
+            if (!connected || PAGE_SERVICE !== 'prime' || adReports >= 300) return;
             const vids = Array.from(document.querySelectorAll('video')).filter(v => Number.isFinite(v.duration) && v.duration >= 300);
             if (!vids.length) {
                 /*
@@ -902,7 +904,9 @@ const WP_SHIM = (() => {
             }
             const key = JSON.stringify(texts) + selfAd;
             // 表示が変わったとき。加えて開いてから5分は15秒ごとにも送る（広告の間に時間がどう進んだかを見るため）
-            const periodic = Date.now() - openedAt < 5 * 60 * 1000 && Date.now() - lastAdAt >= 15000;
+            // ホストが再生中なのにこちらが止まっている間も送る（止まったまま動かない件の調査。2026-09-14）
+            const stalled = hostPlaying && v.paused && !selfAd;
+            const periodic = (Date.now() - openedAt < 5 * 60 * 1000 || stalled) && Date.now() - lastAdAt >= 15000;
             if (key === lastAdKey && !periodic) return;
             lastAdAt = Date.now();
             lastAdKey = key;
@@ -910,7 +914,7 @@ const WP_SHIM = (() => {
             socket.emit('ad-report', {
                 version: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '',
                 selfAd, texts, t: v.currentTime, d: v.duration, paused: v.paused,
-                ct: contentT, plan: planInfo
+                ct: contentT, plan: planInfo, diag: playDiag, hostPlaying, gates: { otherVideo: Boolean(otherVideo), hostHold, hasHost }
             });
         }
         if (PAGE_SERVICE === 'prime') setInterval(reportAds, 1000);
@@ -2503,7 +2507,17 @@ const WP_SHIM = (() => {
      * 飛ばした先から動き出すまでは、しばらく飛ばし直さない
      */
     let tickSeek = null;
-    const TICK_SEEK_SETTLE_MS = 15000;  // 調査用（follow から抜けられない件）。記録の間引きに使う
+    const TICK_SEEK_SETTLE_MS = 15000;
+    /*
+     * ゲストの動画が止まったまま動かないときの立て直し（2026-09-14 PC の Chrome）。
+     * ホストは再生中なのに、ゲストの動画が読み込み中のくるくるのまま1分以上動かなかった。
+     * ホストが一時停止→再生すると直った（ゲストが「止める→位置を合わせて再生」をやり直したため）。
+     * 同じことを自動でやる: 一定時間動かなければ、いったん止めてホストの今の位置を取り直す
+     */
+    const STUCK_MS = 8000;
+    const KICK_GAP_MS = 20000;
+    let lastApplyAt = 0;
+    let stuck = { lastT: null, movedAt: 0, kickAt: 0, kicks: 0 };  // 調査用（follow から抜けられない件）。記録の間引きに使う
 
     function post(type, payload) {
         window.postMessage({ source: WP.SRC_BRIDGE, type, payload }, location.origin);
@@ -2601,6 +2615,7 @@ const WP_SHIM = (() => {
     function apply({ type, currentTime, timestamp, paused, ad } = {}) {
         if (!bound) return;
         if (typeof currentTime !== 'number' || !Number.isFinite(currentTime)) return;
+        lastApplyAt = Date.now();
 
         // ホストが広告中かは定期通知で分かる。広告中のホストは操作を送らないので、
         // 操作が届いたなら広告は終わっている
@@ -2838,10 +2853,50 @@ const WP_SHIM = (() => {
     }
 
     function postStatus() {
+        const v = adapter && adapter._video;
         post('STATUS', {
             selfAd, hostAd, hostPaused,
-            plan: adapter && typeof adapter.planSummary === 'function' ? adapter.planSummary() : null
+            plan: adapter && typeof adapter.planSummary === 'function' ? adapter.planSummary() : null,
+            // 記録用: 動画の読み込みの状態と、立て直しの回数（止まったまま動かない件の調査）
+            diag: v ? {
+                rs: v.readyState, seeking: v.seeking, ns: v.networkState, err: v.error ? v.error.code : 0,
+                ahead: (() => {
+                    try {
+                        for (let i = 0; i < v.buffered.length; i++) {
+                            if (v.buffered.start(i) <= v.currentTime && v.currentTime <= v.buffered.end(i)) return Math.round((v.buffered.end(i) - v.currentTime) * 10) / 10;
+                        }
+                    } catch { /* 無視 */ }
+                    return 0;
+                })(),
+                startup, follow: targetPauseTime !== null, kicks: stuck.kicks
+            } : null
         });
+    }
+
+    function watchStuck() {
+        setInterval(() => {
+            if (!bound || isHost) return;
+            const now = Date.now();
+            const t = adapter.getCurrentTime();
+            if (stuck.lastT === null || Math.abs(t - stuck.lastT) > 0.2) {
+                stuck.lastT = t;
+                stuck.movedAt = now;
+            }
+            // ホストが再生中（最近ホストの知らせが届いている）で、こちらは広告でも開いた直後でも追いつき待ちでもない
+            const shouldPlay = now - lastApplyAt < 12000 && !hostPaused && !hostAd && !selfAd && !startup && targetPauseTime === null;
+            if (!shouldPlay || adapter.isInAd()) { stuck.movedAt = now; return; }
+            if (now - stuck.movedAt < STUCK_MS || now - stuck.kickAt < KICK_GAP_MS) return;
+            stuck.kickAt = now;
+            stuck.kicks++;
+            post('DIAG', { event: 'stuck-kick', url: location.href, t, kicks: stuck.kicks });
+            tickSeek = null;
+            withEchoGuard(() => adapter.pause());
+            postStatus();
+            // 少し待ってからホストの今の位置を取り直す（届いたら位置を合わせて再生する）
+            setTimeout(() => post('READY', pageInfo()), 600);
+        }, 1000);
+        // 記録用に、止まっている間はときどき状態を送り直す
+        setInterval(() => { if (bound && !isHost) postStatus(); }, 5000);
     }
 
     function setHostState(next) {
@@ -2971,6 +3026,7 @@ const WP_SHIM = (() => {
 
         startHeartbeat();
         watchAds();
+        watchStuck();
         watchTitle();
         watchInterruptions();
 
