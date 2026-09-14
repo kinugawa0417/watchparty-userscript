@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.23.0
+// @version      0.23.1
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.23.0";
+    const __WP_VERSION__ = "0.23.1";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -600,16 +600,15 @@ const WP_SHIM = (() => {
                          pointer-events: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px;
                          background: rgba(15,15,19,.94); color: #f2f2f4; border: 1px solid #2c2c36; border-radius: 12px; }
                 /*
-                 * 映像の上に重なる置き方（PC の右側・スマホの重ね置き）は、ほぼ透明にして映像を見やすくする（2026-09-14 ユーザー要望）。
-                 * 字は影を付けて、明るい場面でも読めるようにする。映像の下に置くときは重ならないので、今までどおり。
+                 * PC の右側に置くときだけ、ほぼ透明にして映像を見やすくする（2026-09-14 ユーザー要望）。
+                 * 字は影を付けて、明るい場面でも読めるようにする。スマホは今までどおり（映像にかぶらないため、透明にしないでと要望）。
                  */
-                .panel[data-place="side"], .panel[data-place="overlay"] {
+                .panel[data-place="side"] {
                          background: rgba(0,0,0,.18); border-color: rgba(255,255,255,.12);
                          text-shadow: 0 0 3px #000, 0 1px 2px #000, 0 0 6px rgba(0,0,0,.8); }
-                .panel[data-place="side"] .msg.system, .panel[data-place="overlay"] .msg.system { color: #d0d0d8; }
-                .panel[data-place="side"] .phead, .panel[data-place="overlay"] .phead { color: #e0e0e6; }
-                .panel[data-place="side"] input, .panel[data-place="overlay"] input { background: rgba(20,20,26,.55); border-color: rgba(255,255,255,.2); }
-                .panel[data-place="side"] .close, .panel[data-place="overlay"] .close { background: rgba(58,58,70,.6); }
+                .panel[data-place="side"] .phead { color: #e0e0e6; }
+                .panel[data-place="side"] input { background: rgba(20,20,26,.55); border-color: rgba(255,255,255,.2); }
+                .panel[data-place="side"] .close { background: rgba(58,58,70,.6); }
                 .phead { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9a9aa6; }
                 .phead span { flex: 1; }
                 .close { border: 0; border-radius: 8px; background: #3a3a46; color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; }
