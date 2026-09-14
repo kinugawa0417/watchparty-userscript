@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.20.1
+// @version      0.20.2
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.20.1";
+    const __WP_VERSION__ = "0.20.2";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -944,11 +944,35 @@ const WP_SHIM = (() => {
             if (Math.abs(d) > 2) want = d;
         }
         if (want === applied) return;
-        // transform ではなく translate を使う。Netflix は映像を真ん中に置くのに自分で transform を付けていて、
-        // それを上書きすると映像が画面の上にはみ出した（2026-09-14 本物の Netflix で確認）。translate なら重ねがけになる
-        if (want) video.style.setProperty('translate', `0 ${-want}px`, 'important');
-        else video.style.removeProperty('translate');
+        /*
+         * 映像だけでなく、映像と操作ボタン（巻き戻し・再生・時間表示）をまとめて包むプレイヤーの外枠ごとずらす（2026-09-14 ユーザー要望 A）。
+         * 映像だけずらすと、操作ボタンが元の真ん中に残って浮いた。
+         * transform ではなく translate を使う。Netflix は映像を真ん中に置くのに自分で transform を付けていて、
+         * それを上書きすると映像が画面の上にはみ出した（2026-09-14 本物の Netflix で確認）。translate なら重ねがけになる
+         */
+        const target = playerFrame(video);
+        if (want) target.style.setProperty('translate', `0 ${-want}px`, 'important');
+        else target.style.removeProperty('translate');
         video.dataset.wpShift = String(want);
+    }
+
+    /**
+     * 映像と同じ大きさで映像を包んでいる、いちばん外側の要素（プレイヤーの外枠）。操作ボタンの層もこの中にある。
+     * body / html と、大きさの違う要素の手前で止める。見つからなければ映像そのもの。
+     * 以前ずらした要素と変わったら、前の要素のずらしは戻す
+     */
+    let lastFrame = null;
+    function playerFrame(video) {
+        const vb = video.getBoundingClientRect();
+        let frame = video;
+        for (let el = video.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+            const r = el.getBoundingClientRect();
+            if (Math.abs(r.width - vb.width) > 2 || Math.abs(r.height - vb.height) > 2) break;
+            frame = el;
+        }
+        if (lastFrame && lastFrame !== frame) lastFrame.style.removeProperty('translate');
+        lastFrame = frame;
+        return frame;
     }
 
     /**
