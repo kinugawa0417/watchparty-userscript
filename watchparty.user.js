@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.20.2
+// @version      0.20.3
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.20.2";
+    const __WP_VERSION__ = "0.20.3";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -423,6 +423,28 @@ const WP_SHIM = (() => {
             render();
         }
 
+        /*
+         * Android の Firefox では、画面に一度も触っていない間はスクリプトから再生も位置合わせもしない（2026-09-14 実機）。
+         * Firefox は人が触る前に音の出る動画を始めると一時停止させる。そこへスクリプトが再生し直しを繰り返すと、
+         * Amazon のプレイヤーが「ビデオを視聴できません」で止まった（スクリプトを切るとエラーにはならず、少し動いて止まるだけ）。
+         * 映像の真ん中の「▶ タップして再生」などで一度触ってもらってから、ホストの今の位置を取り直して合わせる
+         */
+        let touched = false;
+        function waitingGesture() {
+            if (!IS_ANDROID || touched) return false;
+            const ua = navigator.userActivation;
+            if (ua && ua.hasBeenActive) { touched = true; return false; }
+            return true;
+        }
+        for (const type of ['pointerdown', 'touchend', 'click', 'keydown']) {
+            window.addEventListener(type, () => {
+                if (!IS_ANDROID || touched) return;
+                touched = true;
+                // 触った直後にホストの今を取り直す（再生の許可が出てから合わせる）
+                setTimeout(() => { if (connected) socket.emit('request-sync'); render(); }, 300);
+            }, true);
+        }
+
         // ホストの操作と定期通知。検査してから bridge.js へ渡す（PC の background と同じ形）
         socket.on('sync-video', (p) => {
             if (!p || typeof p !== 'object' || !SYNC_TYPES.has(p.type)) return;
@@ -431,7 +453,7 @@ const WP_SHIM = (() => {
             if (p.type === 'play') hostPlaying = true;
             else if (p.type === 'pause') hostPlaying = false;
             else if (p.type === 'tick') { hostPlaying = !p.paused && !p.ad; hostAd = Boolean(p.ad); }
-            if (!otherVideo && !hostHold) {
+            if (!otherVideo && !hostHold && !waitingGesture()) {
                 toBridge('APPLY', {
                     type: p.type,
                     currentTime: sec,
@@ -452,7 +474,7 @@ const WP_SHIM = (() => {
             checkTitle(s);
             sendPlan(s);
             hostPlaying = Boolean(s.isPlaying);
-            if (!otherVideo && !hostHold) {
+            if (!otherVideo && !hostHold && !waitingGesture()) {
                 toBridge('APPLY', {
                     type: s.isPlaying ? 'play' : 'pause',
                     currentTime: sec,
@@ -862,6 +884,15 @@ const WP_SHIM = (() => {
         setInterval(() => {
             const v = mainVideo();
             const stuck = v && hostPlaying && !selfAd && !otherVideo && !hostHold && v.paused;
+            // Android でまだ画面に触っていないなら、止まっていなくてもすぐ「タップして再生」を出す
+            // （作品ページの段階では出さない。そこでは「続きを観る」を押すこと自体が、画面に触ったことになる）
+            if (connected && !otherVideo && !hostHold && waitingGesture()) {
+                const lv = layoutVideo();
+                const shownPlayer = Boolean(lv) && lv.videoHeight > 0 && lv.getBoundingClientRect().width >= 200;
+                blockedSince = shownPlayer ? (blockedSince || (Date.now() - PLAY_BLOCKED_MS - 1)) : 0;
+                render();
+                return;
+            }
             blockedSince = stuck ? (blockedSince || Date.now()) : 0;
             render();
         }, 1000);
