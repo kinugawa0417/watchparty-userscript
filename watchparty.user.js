@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.21.0
+// @version      0.21.1
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.21.0";
+    const __WP_VERSION__ = "0.21.1";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -967,11 +967,11 @@ const WP_SHIM = (() => {
         const applied = Number(video.dataset.wpShift || 0);
         let want = 0;
         /*
-         * Android は、本編が実際に再生され始めて落ち着くまでずらさない（2026-09-14 実機で2回確かめた）: v0.20.4 で iPhone と同じく
-         * 読み込み中からずらしたら「ビデオを視聴できません」になった。ずらさない v0.20.3 は再生できた。
-         * そこで「本編（5分以上）が止まらずに3秒以上進んだ」あとだけずらす（試し・v0.21.0）。それまではチャット欄を映像の下に置く
+         * Android では映像を一切ずらさない（2026-09-14 実機で3回確かめた）: 読み込み中からずらす（v0.20.4）も、本編が3秒以上
+         * 進んでからずらす（v0.21.0）も「ビデオを視聴できません」になった。ずらさない v0.20.3 / v0.20.5 は再生できた。
+         * チャット欄は映像の下に置く（placePanel）。キーボードが出ると画面が上に動き、打つときも視聴を妨げない（ユーザー確認）
          */
-        if (portrait && (!IS_ANDROID || androidSettled(video))) {
+        if (portrait && !IS_ANDROID) {
             const r = contentRect(video);
             const originalTop = r.top + applied;          // ずらす前の、映像の上端
             const d = Math.round(originalTop - visibleTop);
@@ -988,20 +988,6 @@ const WP_SHIM = (() => {
         if (want) target.style.setProperty('translate', `0 ${-want}px`, 'important');
         else target.style.removeProperty('translate');
         video.dataset.wpShift = String(want);
-    }
-
-    /** Android: この <video> が本編として実際に再生され、止まらずに3秒以上進んだか（一度満たせば、その要素ではずっと true） */
-    const settledState = new WeakMap();
-    function androidSettled(video) {
-        const st = settledState.get(video) || { ok: false, from: null };
-        if (!st.ok) {
-            const playing = Number.isFinite(video.duration) && video.duration >= 300 && !video.paused && video.readyState >= 3;
-            if (!playing) st.from = null;
-            else if (st.from === null) st.from = video.currentTime;
-            else if (video.currentTime - st.from >= 3) st.ok = true;
-            settledState.set(video, st);
-        }
-        return st.ok;
     }
 
     /**
