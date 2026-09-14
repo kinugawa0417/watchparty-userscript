@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.18.0
+// @version      0.18.1
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -16,7 +16,7 @@
     'use strict';
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.18.0";
+    const __WP_VERSION__ = "0.18.1";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -782,6 +782,13 @@ const WP_SHIM = (() => {
             render();
         }, 1000);
 
+        /** 広告の入った動画なのに、画面の時間表示での答え合わせ（目印）がまだ無いか */
+        function needsClock() {
+            if (!planInfo || !Array.isArray(planInfo.lens) || !Array.isArray(planInfo.anchors)) return false;
+            const ads = planInfo.lens.reduce((s, l) => s + (Number(l) || 0), 0);
+            return ads > 1 && planInfo.anchors.length === 0;
+        }
+
         function render() {
             q('.dot').className = 'dot' + (connected ? ' on' : '');
             q('.text').textContent =
@@ -792,6 +799,8 @@ const WP_SHIM = (() => {
                 : hostAd ? 'ホストの広告が終わるのを待っています'
                 : !playerReady ? (Date.now() - openedAt > 10000
                     ? '動画が始まらないときは、画面の再生ボタンを押してください' : '動画が始まるのを待っています')
+                // 広告の入った動画で、まだ画面の時間表示で答え合わせできていない（操作ボタンを出してもらうと読める。2026-09-14）
+                : needsClock() ? '合わせています。画面を1回タップしてください（広告の時間を確かめます）'
                 : 'ホストに自動で合わせています';
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
@@ -1449,6 +1458,12 @@ const WP_SHIM = (() => {
                 return ad ? ad.len : null;
             });
             /*
+             * 冒頭の枠は、実際に広告が流れたとき（上で測れたとき）以外は 0 秒とみなす（2026-09-14 iPhone 実機: 2回とも、
+             * 枠はあるのに冒頭に広告は無く、広告の分は途中の枠に入っていた。冒頭に割り振ると最初からずれる）。
+             * 画面の時間表示の目印があれば、下でそちらが優先される
+             */
+            const prerollDefault = plan.breaks[0] === 0 && !(this._adOpen && this._adOpen.contentPos < 5);
+            /*
              * 目印ごとに、「その位置より前の枠の広告の合計」が分かっている。
              * 前の目印からこの目印までの間の、まだ長さの分からない枠に、足りない分を等分する
              */
@@ -1464,6 +1479,7 @@ const WP_SHIM = (() => {
                 for (const i of unknown) lens[i] = Math.max(0, need / unknown.length);
                 done = k;
             }
+            if (prerollDefault && lens[0] === null) lens[0] = 0;
             // 残り（最後の目印より後）には、合計から決まった分を引いた残りを等分する
             const unknown = lens.map((l, i) => (l === null ? i : -1)).filter(i => i >= 0);
             const each = unknown.length ? Math.max(0, (total - sumTo(n)) / unknown.length) : 0;
