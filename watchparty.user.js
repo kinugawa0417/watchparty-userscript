@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.18.2
+// @version      0.18.3
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.18.2";
+    const __WP_VERSION__ = "0.18.3";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -677,6 +677,22 @@ const WP_SHIM = (() => {
          * 送るのは「広告」「Ad」「スキップ」「スポンサー」を含む短い文字（プレイヤーの表示）と、再生位置の数だけ。
          * 表示が変わったときと開いてから5分は15秒ごと、1ページ50回まで。
          */
+        /*
+         * ページの中で起きたエラー（2026-09-14）。Android の Firefox だけ、このスクリプトを入れると Amazon の再生が始まらない
+         * （iPhone は同じスクリプトで再生できる）。Amazon のプレイヤーと、このスクリプトのどちらで何が失敗したかを見るため、
+         * エラーの文（先頭120字）と出た場所（ファイル名の末尾と行）だけを、動画が始まらないときの記録に添える。
+         */
+        const pageErrors = [];
+        const keepError = (msg, where) => {
+            if (pageErrors.length >= 8) return;
+            const s = `${String(msg || '').slice(0, 120)} @${String(where || '').split('/').pop().slice(0, 60)}`;
+            if (!pageErrors.includes(s)) pageErrors.push(s);
+        };
+        window.addEventListener('error', (e) => keepError(e.message, `${e.filename || ''}:${e.lineno || 0}`), true);
+        window.addEventListener('unhandledrejection', (e) => {
+            const r = e.reason;
+            keepError(r && (r.name ? `${r.name}: ${r.message}` : r.message) || String(r), 'promise');
+        });
         let adReports = 0;
         let lastAdKey = '';
         let lastAdAt = 0;
@@ -709,7 +725,7 @@ const WP_SHIM = (() => {
                 }));
                 socket.emit('ad-report', {
                     version: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '',
-                    novideo: true, videos: document.querySelectorAll('video').length,
+                    novideo: true, videos: document.querySelectorAll('video').length, errors: pageErrors.slice(),
                     texts: [...vs, ...texts].slice(0, 6)
                 });
                 return;
