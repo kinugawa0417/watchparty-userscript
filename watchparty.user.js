@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.20.4
+// @version      0.20.5
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.20.4";
+    const __WP_VERSION__ = "0.20.5";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -640,6 +640,8 @@ const WP_SHIM = (() => {
         function setOpen(v) {
             open = v;
             q('.panel').hidden = !open;
+            // チャット欄を開いている間は、左下の状態の表示を出さない（見出しに同じ文言がある。後ろに透けて二重に見えた。2026-09-14）
+            q('.status').hidden = open;
             q('.fab').hidden = open;
             if (open) {
                 unread = 0;
@@ -965,10 +967,10 @@ const WP_SHIM = (() => {
         const applied = Number(video.dataset.wpShift || 0);
         let want = 0;
         /*
-         * （2026-09-14）Android で「ビデオを視聴できません」になったとき、映像をずらすのを疑って一度止めたが、原因は別だった
-         * （Firefox の自動再生の決まりとスクリプトの再生のやり直しのぶつかり合い。waitingGesture で解決）。Android も同じくずらす
+         * Android ではずらさない（2026-09-14 実機で2回確かめた）: v0.20.4 で iPhone と同じくずらしたら、作品ページで読み込み中の
+         * 段階からずれ、「ビデオを視聴できません」になった。ずらさない v0.20.3 は再生できた。チャット欄は映像の下に置く（placePanel）
          */
-        if (portrait) {
+        if (portrait && !IS_ANDROID) {
             const r = contentRect(video);
             const originalTop = r.top + applied;          // ずらす前の、映像の上端
             const d = Math.round(originalTop - visibleTop);
