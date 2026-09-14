@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.23.3
+// @version      0.23.4
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.23.3";
+    const __WP_VERSION__ = "0.23.4";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -172,8 +172,9 @@ const WP_US = (() => {
             if (v.service === 'youtube') return `https://www.youtube.com/watch?v=${enc(v.contentId)}&t=${sec}s`;
             if (v.service === 'prime') {
                 // 日本版アプリは app.primevideo.com でないと開かない。時刻は無視される（実機で確認）
-                return v.appId
-                    ? `https://app.primevideo.com/detail?gti=${enc(v.appId)}&autoplay=1&t=${sec}`
+                const gti = v.appId || (GTI_RE.test(v.contentId) ? v.contentId : null);   // ドラマの話は contentId が GTI
+                return gti
+                    ? `https://app.primevideo.com/detail?gti=${enc(gti)}&autoplay=1&t=${sec}`
                     : `https://app.primevideo.com/detail?asin=${enc(v.contentId)}&autoplay=1&t=${sec}`;
             }
             return null;
@@ -246,7 +247,10 @@ const WP_US = (() => {
         plain(v) {
             if (v.service === 'netflix') return `https://www.netflix.com/watch/${enc(v.contentId)}`;
             if (v.service === 'youtube') return `https://www.youtube.com/watch?v=${enc(v.contentId)}`;
-            if (v.service === 'prime') return `https://app.primevideo.com/detail?asin=${enc(v.contentId)}`;
+            if (v.service === 'prime') {
+                return GTI_RE.test(v.contentId) ? `https://app.primevideo.com/detail?gti=${enc(v.contentId)}`
+                    : `https://app.primevideo.com/detail?asin=${enc(v.contentId)}`;
+            }
             return null;
         }
     };
@@ -1335,7 +1339,8 @@ const WP_SHIM = (() => {
 
     // amazon.co.jp の作品 ID。ASIN（B で始まる10桁）のほか、再生を始めると
     // 26桁前後の別形式（GTI）の URL に書き換えられる。途中で切らないよう区切りまで取る
-    const AMAZON_ID = /\/(?:dp|gp\/video\/detail)\/([A-Z0-9]{10}|[A-Z0-9]{20,40})(?=[/?#]|$)/;
+    // GTI（amzn1.dv.gti.…）でも開ける。ドラマの話を指定して開くのに使う（2026-09-14）
+    const AMAZON_ID = /\/(?:dp|gp\/video\/detail)\/([A-Z0-9]{10}|[A-Z0-9]{20,40}|amzn1\.dv\.gti\.[0-9a-f-]{36})(?=[/?#]|$)/;
     const PRIMEVIDEO_ID = /primevideo\.com\/(?:region\/[a-z]{2}\/)?detail\/([A-Za-z0-9.]+)/;
 
     // これより短い動画は予告編とみなして掴まない（秒）。
@@ -2751,19 +2756,87 @@ const WP_SHIM = (() => {
         ownPlan = ev.data.plan;
         ownPlanAt = Date.now();
         ownPlanUrl = location.href;
+        checkEpisode(ev.data.titleId);
         usePlan();
     });
     function usePlan() {
         if (!ownPlan || !adapter || typeof adapter.setAdPlan !== 'function') return;
-        const contentId = adapter.getContentId(location.href);
+        const pageId = adapter.getContentId(location.href);
         // 読んだあとに別の作品へ移っていたら使わない（Prime は再生を始めると同じ作品のまま URL を書き換えるので、少しの間は許す）
-        if (contentId !== adapter.getContentId(ownPlanUrl) && Date.now() - ownPlanAt > 20000) return;
+        if (pageId !== adapter.getContentId(ownPlanUrl) && Date.now() - ownPlanAt > 20000) return;
         adapter.setAdPlan(ownPlan, true);
         postStatus();
+        const contentId = pageInfo().contentId;
         if (isTop && isHost && contentId) post('META', { contentId, plan: ownPlan });
     }
 
+    /*
+     * ドラマの話（2026-09-14 ユーザー報告: ドラマだとゲストが別の話を再生した）。
+     * Prime のドラマはシーズンのページのまま中で話を再生するので、ページのアドレス（シーズン）を送ると、
+     * ゲストは自分の「続きを観る」の話を再生してしまう。
+     * プレイヤーが取りに行った再生情報の titleId（いま再生している話の GTI）が、ページ自身の GTI と違えば
+     * 「このページの中の話」とみなし、その GTI を作品として送る（amazon.co.jp/gp/video/detail/GTI/?autoplay=1 で
+     * その話が再生されることを本物の Prime で確認）。映画はページの GTI と同じなので今までどおりページの ID を送る。
+     */
+    const GTI_RE = /^amzn1\.dv\.gti\.[0-9a-f-]{36}$/;
+    let episode = null;   // { gti, page: シーズンのページの ID }
+    let episodeTimer = null;
+    const EPISODE_PRELOAD_WAIT_MS = 6000;
+    function checkEpisode(titleId) {
+        if (!adapter || adapter.constructor.service !== 'prime' || !isTop) return;
+        if (typeof titleId !== 'string' || !GTI_RE.test(titleId)) return;
+        clearInterval(episodeTimer);
+        const page = adapter.getContentId(location.href);
+        let tries = 0;
+        /*
+         * プレイヤーが画面に出てから決める。作品ページを開いただけでも、Amazon は「続きを観る」の話を
+         * 見えない所に用意して再生情報を取りに行く（本物の Prime で確認）。それを再生中の話と取り違えないため。
+         * 用意されていた話は、プレイヤーが出てからしばらく新しい再生情報が来なかったとき（そのまま「続きを観る」を
+         * 押したとき）だけ使う。別の話を押すと、プレイヤーが出たあとにその話の再生情報が届く（ここが呼び直される）
+         */
+        const openAtReceipt = Boolean(bound && adapter.isPlayerOpen());
+        let openSince = openAtReceipt ? Date.now() - EPISODE_PRELOAD_WAIT_MS : 0;
+        const decide = () => {
+            if (!bound || !adapter.isPlayerOpen()) { openSince = 0; return; }
+            if (!openSince) openSince = Date.now();
+            if (Date.now() - openSince < EPISODE_PRELOAD_WAIT_MS) return;
+            let pageGti = null;
+            try { pageGti = adapter.getAppId(); } catch { /* ページの作りが変わった */ }
+            // ページの GTI がまだ読めないなら少し待つ（読めないままなら、アドレスが GTI でない限り話として扱う）
+            if (!pageGti && ++tries < 10) return;
+            clearInterval(episodeTimer);
+            const next = titleId !== pageGti && titleId !== page ? { gti: titleId, page } : null;
+            const changed = (next && next.gti) !== (episode && episode.gti);
+            episode = next;
+            if (changed) {
+                post('DIAG', { event: 'episode', url: location.href, gti: titleId, pageGti, page });
+                sendInfo();
+            }
+        };
+        episodeTimer = setInterval(decide, 1000);
+        decide();
+    }
+
+    /** いま再生している話（このページの中の話）。別の作品のページへ移っていたら null */
+    function currentEpisode() {
+        if (!episode || !adapter) return null;
+        const page = adapter.getContentId(location.href);
+        if (page === episode.page || page === episode.gti || (bound && adapter.isPlayerOpen())) return episode;
+        episode = null;
+        return null;
+    }
+
     function pageInfo() {
+        const ep = currentEpisode();
+        if (ep) {
+            return {
+                service: adapter.constructor.service,
+                contentId: ep.gti,
+                url: adapter.buildUrl(ep.gti),
+                // その話が入っているページ（シーズン）。そのページを送ってあれば、最初の話は確かめずに送る（background）
+                pageContentId: ep.page
+            };
+        }
         const contentId = adapter.getContentId(location.href);
         return {
             service: adapter.constructor.service,
