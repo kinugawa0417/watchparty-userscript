@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.18.1
+// @version      0.18.2
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -14,9 +14,22 @@
 
 (function () {
     'use strict';
+    /*
+     * 招待のリンク（?wp= / #wp=）から開いたタブでなければ、ここで終わる。通信の部品も何も読み込まない（2026-09-14）。
+     * Android の Firefox で、このスクリプトを入れていると Amazon の再生が始まらなくなった（スクリプトを切ると再生できた）。
+     * 原因の特定の前に、ふだんの Amazon のページには一切触れない形にした。
+     */
+    if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
+    {
+        let invited = /(?:^|[?&#])wp=/.test(location.search + '&' + location.hash);
+        try { invited = invited || Boolean(sessionStorage.getItem('wp:userscript')); } catch { /* 使えない設定 */ }
+        if (!invited) return;
+    }
+    // bridge.js に「スマホのスクリプトの中で動いている」ことを伝える（ホストだけが要る重い処理を省く）
+    const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.18.1";
+    const __WP_VERSION__ = "0.18.2";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -897,105 +910,7 @@ const WP_SHIM = (() => {
     // 友達の画面の「🌐 ブラウザで見る」から開いたタブだけで動く。ふだんの Amazon には何もしない
     const target = WP_SHIM.readRoom();
     if (!target) return;
-    // ---- extension/content/prime-plan.js（広告の入る位置。読み込みが遅いので、あとの作品の分から読める）----
-    if (location.hostname !== 'www.netflix.com') {
-/**
- * Prime の「広告の入る位置」を、プレイヤー自身が取りに行く再生情報から読む（2026-09-14）。
- *
- * ■ なぜ要るか（iPhone 実機の記録）
- * Prime は広告を本編と同じ <video> に最初から差し込んでおく（まだ流れていない広告も含む）。
- * 例: スパイダーマン 本編 7284 秒 → 広告つきの人の <video> は 7512.5 秒（広告 228 秒ぶん長い）。
- * 広告のカウントダウンを見て測る方式では、まだ通っていない広告を知りようがなく、
- * ホストが先へ移動するとゲストはその広告の長さぶん後ろにずれた。
- *
- * ■ 読むもの
- * プレイヤーが取りに行く GetVodPlaybackResources の返事（JSON）の
- *   vodPlaylistedPlaybackUrls.result.playbackUrls.fullTitleDurationMs … 本編の長さ（広告を含まない）
- *   〃 .intraTitlePlaylist … [Remote(広告), Main(0〜3793664ms), Remote(広告), Main(3793664〜6395000ms)] のような並び
- * Main の区切りは本編の時間なので、Remote（広告の枠）の位置が本編の時間で分かる。広告の長さはここには無いが、
- * 「<video> の長さ − 本編の長さ」で広告の合計が分かる（adapters/prime.js）。
- *
- * ■ 決まり
- * この返事以外は読まない・書き換えない。返事の中身も数（長さ・位置）しか取り出さない。
- * ページより先に動く必要がある（document_start、ページと同じ文脈）。
- */
-(() => {
-    if (globalThis.__wpPrimePlan) return;
-    const MIN_FULL_MS = 300 * 1000;          // これより短いのは予告編
-    const MAX_FULL_MS = 24 * 3600 * 1000;
-    const URL_RE = /\/playback\/prs\/GetVodPlaybackResources/;
-
-    /** 返事の JSON から { fullMs, breaks: [本編の時間 ms] } を取り出す。読めなければ null */
-    function parse(json) {
-        const p = json && json.vodPlaylistedPlaybackUrls && json.vodPlaylistedPlaybackUrls.result &&
-            json.vodPlaylistedPlaybackUrls.result.playbackUrls;
-        if (!p || typeof p !== 'object') return null;
-        const fullMs = Number(p.fullTitleDurationMs);
-        if (!Number.isFinite(fullMs) || fullMs < MIN_FULL_MS || fullMs > MAX_FULL_MS) return null;
-        const list = Array.isArray(p.intraTitlePlaylist) ? p.intraTitlePlaylist : [];
-        const breaks = [];
-        let cursor = 0;
-        for (const e of list) {
-            if (!e || typeof e !== 'object') continue;
-            if (e.type === 'Main') {
-                if (Number.isFinite(e.endMs)) cursor = e.endMs;
-            } else if (e.type === 'Remote') {
-                if (!breaks.includes(cursor)) breaks.push(cursor);
-            }
-        }
-        return { fullMs, breaks: breaks.filter(ms => ms >= 0 && ms <= fullMs).sort((a, b) => a - b).slice(0, 40) };
-    }
-
-    let last = null;
-    const post = () => window.postMessage({ source: 'wp-plan', plan: last }, location.origin);
-    const handleText = (text) => {
-        try {
-            const plan = parse(JSON.parse(text));
-            if (plan) { last = plan; post(); }
-        } catch { /* JSON でない */ }
-    };
-
-    const origFetch = window.fetch;
-    if (typeof origFetch === 'function') {
-        window.fetch = function (input) {
-            const res = Reflect.apply(origFetch, globalThis, arguments);
-            try {
-                const url = typeof input === 'string' ? input : input && input.url;
-                if (URL_RE.test(String(url || ''))) {
-                    res.then(r => r.clone().text()).then(handleText).catch(() => {});
-                }
-            } catch { /* 読めなくてもページの通信は邪魔しない */ }
-            return res;
-        };
-    }
-
-    const XHR = globalThis.XMLHttpRequest && XMLHttpRequest.prototype;
-    if (XHR) {
-        const open = XHR.open;
-        XHR.open = function (method, url) {
-            try {
-                if (URL_RE.test(String(url || ''))) {
-                    this.addEventListener('load', () => {
-                        try {
-                            if (this.responseType === '' || this.responseType === 'text') handleText(this.responseText);
-                            else if (this.responseType === 'json') handleText(JSON.stringify(this.response));
-                        } catch { /* 無視 */ }
-                    });
-                }
-            } catch { /* 無視 */ }
-            return Reflect.apply(open, this, arguments);
-        };
-    }
-
-    // あとから動き出した bridge.js が、読めた分を取りに来る
-    window.addEventListener('message', (ev) => {
-        if (ev.source === window && ev.data && ev.data.source === 'wp-plan-req' && last) post();
-    });
-
-    Object.defineProperty(globalThis, '__wpPrimePlan', { value: { parse }, configurable: false });
-})();
-
-    }
+    // extension/content/prime-plan.js（ページの通信を見張る）は入れない。広告の入る位置はホストの PC から届く（2026-09-14）
     WP_SHIM.start(target);
 
     // ---- extension/adapters/base.js ----
@@ -2576,6 +2491,8 @@ const WP_SHIM = (() => {
     function lookForAppId(contentId) {
         clearInterval(appIdTimer);
         if (!contentId || typeof adapter.getAppId !== 'function') return;
+        // スマホのスクリプトでは探さない（使うのはホストの PC だけ。ページの大きな埋め込みデータを毎秒読むので重い）
+        if (typeof __WP_USERSCRIPT__ !== 'undefined') return;
         let tries = 0;
         const probe = () => {
             // 探している間に別の作品へ移っていたらやめる
