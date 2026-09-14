@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.18.3
+// @version      0.19.0
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.18.3";
+    const __WP_VERSION__ = "0.19.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -554,8 +554,11 @@ const WP_SHIM = (() => {
                 input { flex: 1; min-width: 0; font-size: 16px; padding: 10px; border-radius: 8px;
                         border: 1px solid #2c2c36; background: #1a1a21; color: #f2f2f4; }
                 .send { border: 0; border-radius: 8px; background: #3a6df0; color: #fff; font-size: 16px; font-weight: 700; padding: 0 14px; min-height: 44px; }
+                /* 上の安全領域（iPhone の時刻の帯など）の高さを測るためだけの見えない箱 */
+                .safe { position: fixed; top: 0; left: 0; width: 0; height: env(safe-area-inset-top, 0px); pointer-events: none; }
                 [hidden] { display: none !important; }
             </style>
+            <div class="safe" aria-hidden="true"></div>
             <div class="status">
                 <div class="pill"><span class="dot"></span><span class="text">Watch Party</span></div>
             </div>
@@ -616,6 +619,39 @@ const WP_SHIM = (() => {
          * キーボードが出ると見えている高さ（visualViewport）が縮むので、そのたびに置き直す。
          */
         const MIN_PANEL_PX = 170;
+        /** 見えている範囲の上端（visualViewport のずれ＋上の安全領域） */
+        function visibleTop() {
+            const vv = globalThis.visualViewport;
+            return (vv ? vv.offsetTop : 0) + (q('.safe') ? q('.safe').getBoundingClientRect().height : 0);
+        }
+
+        /*
+         * 2026-09-14 ユーザー要望: チャットを見ながら観る前提なので、縦持ちの映像はチャット欄の開け閉めに関係なく
+         * いつも見えている範囲の一番上に置く。チャット欄は、再生画面が出たら最初から開く
+         * （作品ページの段階では開かない。「続きを観る」などのボタンを隠してしまうため）。自分で閉じたら勝手に開かない。
+         */
+        let userClosed = false;
+        let lastLayoutSig = '';
+        function layoutTick() {
+            const video = layoutVideo();
+            const portrait = window.innerHeight > window.innerWidth;
+            if (video) shiftUp(video, portrait, visibleTop());
+            const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
+            if (playerShown && !open && !userClosed) setOpen(true);
+            /*
+             * 置き場所の計算し直しは、画面の大きさや映像の位置が変わったときだけ（2026-09-14）。
+             * チャット欄を開いたまま毎秒計算し直すと、本物の Prime でゲストが 3〜4 秒遅れた（止めると 0.7 秒）
+             */
+            const vv = globalThis.visualViewport;
+            const r = video ? video.getBoundingClientRect() : null;
+            const sig = [window.innerWidth, window.innerHeight, vv ? Math.round(vv.height) : 0, vv ? Math.round(vv.offsetTop) : 0,
+                r ? Math.round(r.top) : -1, r ? Math.round(r.height) : -1, video ? video.videoHeight : 0, open].join('|');
+            if (sig !== lastLayoutSig) {
+                lastLayoutSig = sig;
+                placePanel();
+            }
+        }
+
         function placePanel() {
             if (!open) return;
             const panel = q('.panel');
@@ -624,7 +660,7 @@ const WP_SHIM = (() => {
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) shiftUp(video, portrait);
+            if (video) shiftUp(video, portrait, visibleTop());
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
@@ -664,6 +700,7 @@ const WP_SHIM = (() => {
                 view: { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight },
                 video: video ? box(video.getBoundingClientRect()) : null,
                 vw: video ? video.videoWidth : null, vh: video ? video.videoHeight : null,
+                top: Math.round(visibleTop()), ih: window.innerHeight, vvh: globalThis.visualViewport ? Math.round(visualViewport.height) : null,
                 fit: cs ? cs.objectFit : '', pos: cs ? cs.objectPosition : '',
                 shift: video ? Number(video.dataset.wpShift || 0) : null,
                 place: panel.dataset.place, panel: box(panel.getBoundingClientRect()),
@@ -766,7 +803,7 @@ const WP_SHIM = (() => {
         window.addEventListener('resize', placePanel);
         window.addEventListener('orientationchange', () => setTimeout(placePanel, 300));
         // プレイヤーの大きさはページの作りで後から変わるので、開いている間はときどき測り直す
-        setInterval(placePanel, 1000);
+        setInterval(layoutTick, 1000);
         function renderBadge() {
             q('.badge').hidden = unread === 0;
             q('.badge').textContent = unread > 99 ? '99+' : String(unread);
@@ -783,7 +820,7 @@ const WP_SHIM = (() => {
             }
         }
         q('.fab').addEventListener('click', () => setOpen(true));
-        q('.close').addEventListener('click', () => setOpen(false));
+        q('.close').addEventListener('click', () => { userClosed = true; setOpen(false); });
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
             const input = q('input');
@@ -861,18 +898,25 @@ const WP_SHIM = (() => {
      * 映像の上が切れた。どちらの作りでも効くよう、映っている位置からの計算に揃えた。
      * どれだけずらしたかを覚えておき、測り直すたびに元の位置から計算し直す（ずらしが積み重ならないように）。
      */
-    function shiftUp(video, portrait) {
+    /*
+     * 2026-09-14 ユーザー実機: 上へ寄せた映像の上が切れた（Android は大きく、iPhone も少し）。
+     * 以前はページの上端（0）に合わせていたが、見えている範囲の上端はそこより下のことがある
+     * （iPhone の時刻の帯＝安全領域、見えている範囲のずれ visualViewport.offsetTop）。見えている上端に合わせる。
+     * 上にはみ出している映像は下へずらす（want が負）。
+     */
+    function shiftUp(video, portrait, visibleTop = 0) {
         const applied = Number(video.dataset.wpShift || 0);
         let want = 0;
         if (portrait) {
             const r = contentRect(video);
             const originalTop = r.top + applied;          // ずらす前の、映像の上端
-            if (originalTop > 8) want = Math.round(originalTop);
+            const d = Math.round(originalTop - visibleTop);
+            if (Math.abs(d) > 2) want = d;
         }
         if (want === applied) return;
         // transform ではなく translate を使う。Netflix は映像を真ん中に置くのに自分で transform を付けていて、
         // それを上書きすると映像が画面の上にはみ出した（2026-09-14 本物の Netflix で確認）。translate なら重ねがけになる
-        if (want) video.style.setProperty('translate', `0 -${want}px`, 'important');
+        if (want) video.style.setProperty('translate', `0 ${-want}px`, 'important');
         else video.style.removeProperty('translate');
         video.dataset.wpShift = String(want);
     }
