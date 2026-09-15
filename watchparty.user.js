@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.23.4
+// @version      0.24.0
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.23.4";
+    const __WP_VERSION__ = "0.24.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -409,6 +409,22 @@ const WP_SHIM = (() => {
         // 記録用: 広告の入る位置の換算のまとめ（bridge.js の STATUS）と、本編の時間（PLAYER_EVENT）
         let planInfo = null;
         let playDiag = null;
+        /*
+         * ずれの見張り（2026-09-14 ユーザー要望: 実際に使うとき、ずれや止まったままに気づけない。ゲストが困って離脱する）。
+         *   hostRef … ホストの本編の位置と、それを受け取った時刻（再生中なら時間の分だけ進めて比べる）
+         *   mine    … bridge.js が5秒ごとに知らせる、自分の本編の位置と止まっているか
+         * ずれが大きい・止まったままが続いたら、真ん中に「立て直す」を大きく出す。ホストの参加者一覧にも出る（sync-report）
+         */
+        let hostRef = null;
+        let hostVideo = null;       // ホストのいまの作品（立て直すときに開き直す）
+        let mine = null;
+        let nfDiag = null;
+        let troubleSince = 0;
+        let trouble = null;         // 'drift' | 'stalled' | null
+        let fixDismissedAt = 0;
+        let lastSyncReportAt = 0;
+        const TROUBLE_SHOW_MS = 20000;
+        const DRIFT_SHOW_SEC = 8;
         let contentT = null;
 
         /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
@@ -493,6 +509,7 @@ const WP_SHIM = (() => {
             if (p.type === 'play') hostPlaying = true;
             else if (p.type === 'pause') hostPlaying = false;
             else if (p.type === 'tick') { hostPlaying = !p.paused && !p.ad; hostAd = Boolean(p.ad); }
+            hostRef = { t: sec, at: Number.isFinite(p.timestamp) && Math.abs(p.timestamp - Date.now()) < 60000 ? p.timestamp : Date.now() };
             if (!otherVideo && !hostHold && !waitingGesture()) {
                 toBridge('APPLY', {
                     type: p.type,
@@ -514,6 +531,8 @@ const WP_SHIM = (() => {
             checkTitle(s);
             sendPlan(s);
             hostPlaying = Boolean(s.isPlaying);
+            hostRef = { t: sec, at: Number.isFinite(s.lastUpdate) && Math.abs(s.lastUpdate - Date.now()) < 10 * 60000 ? s.lastUpdate : Date.now() };
+            if (s.contentId) hostVideo = U.cleanVideo(s);
             if (!otherVideo && !hostHold && !waitingGesture()) {
                 toBridge('APPLY', {
                     type: s.isPlaying ? 'play' : 'pause',
@@ -526,6 +545,7 @@ const WP_SHIM = (() => {
 
         socket.on('change-video', (v) => {
             hostHold = false;
+            if (v && typeof v === 'object') hostVideo = U.cleanVideo(v) || hostVideo;
             checkTitle(v);
             // 同じ作品が送り直された（Prime の次の話で、アドレスが変わらないとき）→ ホストの今の位置を取り直す
             if (!otherVideo && connected) socket.emit('request-sync');
@@ -563,6 +583,9 @@ const WP_SHIM = (() => {
                 hostAd = Boolean(d.payload && d.payload.hostAd);
                 planInfo = d.payload && d.payload.plan && typeof d.payload.plan === 'object' ? d.payload.plan : null;
                 playDiag = d.payload && d.payload.diag && typeof d.payload.diag === 'object' ? d.payload.diag : null;
+                nfDiag = d.payload && d.payload.nf && typeof d.payload.nf === 'object' ? d.payload.nf : null;
+                if (d.payload && typeof d.payload.t === 'number') mine = { t: d.payload.t, paused: d.payload.paused === true, at: Date.now() };
+                watchSync();
                 render();
             } else if (d.type === 'PLAYER_EVENT' && d.payload && typeof d.payload.currentTime === 'number') {
                 contentT = d.payload.currentTime;   // 記録用（広告を除いた本編の時間）。サーバーへは送らない
@@ -598,7 +621,20 @@ const WP_SHIM = (() => {
                 .tap, .other { pointer-events: auto; display: block; border: 0; cursor: pointer; text-decoration: none;
                        font: 700 16px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
                        background: #3a6df0; border-radius: 10px; padding: 12px 16px; }
-                .other { background: #1f8a5a; max-width: 100%; }
+                /* 「ホストの作品を開く」は必ず押すボタンなので、真ん中に大きく出す（2026-09-14 ユーザー要望: 小さくて見逃された） */
+                .other { position: fixed; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 7; background: #1f8a5a;
+                         font-size: 22px; padding: 18px 30px; border-radius: 16px; text-align: center; white-space: normal; width: max-content; max-width: 92vw;
+                         box-shadow: 0 6px 24px rgba(0,0,0,.6); border: 3px solid #fff; animation: wppulse 1.6s ease-in-out infinite; }
+                .other small { display: block; font-size: 14px; font-weight: 600; margin-top: 4px; opacity: .9; }
+                @keyframes wppulse { 0%, 100% { transform: translate(-50%, -50%) scale(1); } 50% { transform: translate(-50%, -50%) scale(1.05); } }
+                /* 再生が止まったまま・大きくずれたままのときの立て直し（真ん中に大きく） */
+                .fix { position: fixed; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 7; pointer-events: auto;
+                       background: rgba(20,20,26,.92); border: 2px solid #ffcc33; border-radius: 16px; padding: 16px 20px; text-align: center;
+                       color: #fff; font: 700 18px/1.5 -apple-system, system-ui, sans-serif; box-shadow: 0 6px 24px rgba(0,0,0,.6); max-width: min(92vw, 460px); }
+                .fix button { display: block; width: 100%; margin-top: 10px; border: 0; border-radius: 12px; cursor: pointer;
+                              font: 700 20px/1.3 -apple-system, system-ui, sans-serif; padding: 14px 18px; color: #fff; background: #3a6df0; }
+                .fix .later { background: transparent; font-size: 14px; padding: 6px; margin-top: 4px; color: #c8c8d0; }
+                .refix { border: 0; border-radius: 8px; background: rgba(58,58,70,.6); color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; cursor: pointer; }
                 .tap { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 6;
                        font-size: 20px; padding: 16px 28px; border-radius: 999px; box-shadow: 0 4px 18px rgba(0,0,0,.5); white-space: nowrap; }
                 /* 広告の時間を確かめるための「1回タップ」の知らせ。見逃されたので真ん中に大きく出す（2026-09-14）。
@@ -669,13 +705,15 @@ const WP_SHIM = (() => {
             <!-- 映像の真ん中に大きく出す（2026-09-14 Android エミュレーター: Amazon のスマホ向けプレイヤーは人が触るまで再生しない。左下の小さいボタンでは気づきにくかった） -->
             <button class="tap" hidden>▶ タップして再生</button>
             <div class="clock" hidden></div>
+            <div class="clock adwait" hidden>⏸ ホストが広告を見ています<small>終わると自動で再開します（止まっているのは故障ではありません）</small></div>
+            <div class="fix" hidden><div class="fmsg"></div><button class="go" type="button">🔄 再生を立て直す</button><button class="later" type="button">このまま見る</button></div>
             <div class="top">
                 <button class="update" hidden></button>
-                <a class="other" hidden></a>
             </div>
+            <a class="other" hidden></a>
             <button class="fab">💬<span class="badge" hidden></span></button>
             <div class="panel" hidden>
-                <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="pop" title="チャットを別の窓で開く" aria-label="チャットを別の窓で開く" hidden>⧉</button><button class="close" aria-label="閉じる">✕</button></div>
+                <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="refix" title="再生がおかしいときに立て直す" aria-label="再生を立て直す">🔄</button><button class="pop" title="チャットを別の窓で開く" aria-label="チャットを別の窓で開く" hidden>⧉</button><button class="close" aria-label="閉じる">✕</button></div>
                 <div class="notice" hidden></div>
                 <div class="msgs"></div>
                 <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
@@ -950,6 +988,9 @@ const WP_SHIM = (() => {
         }
         q('.fab').addEventListener('click', () => setOpen(true));
         q('.close').addEventListener('click', () => { userClosed = true; setOpen(false); });
+        q('.refix').addEventListener('click', fixPlayback);
+        q('.fix .go').addEventListener('click', fixPlayback);
+        q('.fix .later').addEventListener('click', () => { fixDismissedAt = Date.now(); render(); });
         /*
          * チャットを別の窓で開く（PC のゲスト。2026-09-14 ユーザー要望）。招待ページのチャットを小さな窓で開き、
          * この画面のチャット欄は閉じて映像を全部見せる（💬 でいつでも戻せる）。
@@ -1010,8 +1051,56 @@ const WP_SHIM = (() => {
             window.addEventListener(type, () => {
                 if (!clockShownAt || clockDismissed || Date.now() - clockShownAt < 800) return;
                 clockDismissed = true;
-                q('.clock').hidden = true;
+                q('.clock:not(.adwait)').hidden = true;
             }, { capture: true, passive: true });
+        }
+
+        /** いまホストとのずれを比べてよい状態か（広告・作品の切り替え・準備中は比べない） */
+        function comparable() {
+            return connected && hasHost && hostPlaying && !hostAd && !selfAd && !otherVideo && !hostHold && playerReady &&
+                !waitingGesture() && hostRef && Date.now() - hostRef.at < 20000 && mine && Date.now() - mine.at < 8000;
+        }
+
+        function watchSync() {
+            let drift = null;
+            let stalled = false;
+            if (comparable()) {
+                const expected = hostRef.t + (Date.now() - hostRef.at) / 1000;
+                drift = Math.round((mine.t - expected) * 10) / 10;
+                stalled = mine.paused;
+            }
+            const now = Date.now();
+            const bad = drift !== null && (stalled || Math.abs(drift) > DRIFT_SHOW_SEC);
+            if (!bad) { troubleSince = 0; trouble = null; }
+            else {
+                if (!troubleSince) troubleSince = now;
+                trouble = stalled ? 'stalled' : 'drift';
+            }
+            // ホストの一覧と記録へ。ずれがあるときは15秒ごと、無いときは1分ごと
+            const gap = bad || (drift !== null && Math.abs(drift) >= 3) ? 15000 : 60000;
+            if (connected && now - lastSyncReportAt >= gap) {
+                lastSyncReportAt = now;
+                socket.emit('sync-report', { drift, stalled, t: mine ? mine.t : null, service: PAGE_SERVICE, nf: bad ? nfDiag : null });
+            }
+        }
+
+        /** 立て直すときに開くアドレス（ホストのいまの作品を、今と同じサイトで開く） */
+        function reopenUrl(v) {
+            const script = { version: target.latest, date: target.latestDate, hub: target.hub };
+            const open = PAGE_SERVICE === 'netflix' ? U.urls.netflixWeb
+                : location.hostname === 'www.primevideo.com' ? U.urls.primeVideoWeb : U.urls.primeWeb;
+            return v ? open(v, target.room, target.name, false, script) : null;
+        }
+
+        /*
+         * 再生を立て直す（2026-09-14 ユーザー要望: ゲストの画面で再生されないことが時々あり、ゲストが困る）。
+         * ホストのいまの作品を開き直す。自動の立て直し（一度止めて位置を取り直す）で直らなかったとき用。
+         * 開き直すとプレイヤーが最初から読み込み直すので、読み込みが止まった状態からも抜けられる
+         */
+        function fixPlayback() {
+            socket.emit('sync-report', { drift: null, stalled: trouble === 'stalled', t: mine ? mine.t : null, service: PAGE_SERVICE, fix: true, nf: nfDiag });
+            const url = hostVideo && hostVideo.service === PAGE_SERVICE ? reopenUrl(hostVideo) : null;
+            setTimeout(() => { if (url) location.href = url; else location.reload(); }, 200);
         }
 
         /** 広告の入った動画なのに、画面の時間表示での答え合わせ（目印）がまだ無いか */
@@ -1041,19 +1130,19 @@ const WP_SHIM = (() => {
             q('.hstate').style.color = connected && hasHost && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
             const clock = connected && hasHost && !otherVideo && !hostHold && playerReady && needsClock() && !clockDismissed && q('.tap').hidden;
-            if (clock && q('.clock').hidden) {
-                q('.clock').textContent = IS_DESKTOP ? '🖱 マウスを画面の上で動かしてください' : '👆 画面を1回タップしてください';
+            if (clock && q('.clock:not(.adwait)').hidden) {
+                q('.clock:not(.adwait)').textContent = IS_DESKTOP ? '🖱 マウスを画面の上で動かしてください' : '👆 画面を1回タップしてください';
                 const note = document.createElement('small');
                 note.textContent = '広告の時間を確かめて、ホストにぴったり合わせます（動かすと消えます）';
                 if (!IS_DESKTOP) note.textContent = '広告の時間を確かめて、ホストにぴったり合わせます（タップすると消えます）';
-                q('.clock').appendChild(note);
+                q('.clock:not(.adwait)').appendChild(note);
                 clockShownAt = Date.now();
             }
-            q('.clock').hidden = !clock;
+            q('.clock:not(.adwait)').hidden = !clock;
             if (clock) {
                 const cv = layoutVideo();
                 const cr = cv ? contentRect(cv) : null;
-                q('.clock').style.top = cr && cr.height > 0 ? `${Math.round(cr.top + cr.height / 2)}px` : '40%';
+                q('.clock:not(.adwait)').style.top = cr && cr.height > 0 ? `${Math.round(cr.top + cr.height / 2)}px` : '40%';
             }
             if (!q('.tap').hidden) {
                 // 見えている映像の真ん中へ（映像が見つからなければ画面の少し上）
@@ -1063,16 +1152,29 @@ const WP_SHIM = (() => {
             }
             const other = q('.other');
             // 今と同じサイト（amazon.co.jp / primevideo.com）で開く
-            const openOther = PAGE_SERVICE === 'netflix' ? U.urls.netflixWeb
-                : location.hostname === 'www.primevideo.com' ? U.urls.primeVideoWeb : U.urls.primeWeb;
-            const url = otherVideo ? openOther(otherVideo, target.room, target.name, false) : null;
+            const url = otherVideo ? reopenUrl(otherVideo) : null;
             if (url) {
                 other.href = url;
                 other.textContent = '▶ ホストの作品を開く';
+                const sub = document.createElement('small');
+                sub.textContent = 'ホストが別の作品（話）に変えました。押してください';
+                other.appendChild(sub);
                 other.hidden = false;
             } else {
                 other.hidden = true;
             }
+            // 止まったまま・大きくずれたままが続いたら、立て直しを真ん中に（「このまま見る」を押したら2分は出さない）
+            // 「▶ タップして再生」が出ていても20秒直らなければ、こちらに替える（タップでは直らない止まり方）
+            const fixShown = Boolean(trouble) && troubleSince && Date.now() - troubleSince > TROUBLE_SHOW_MS &&
+                Date.now() - fixDismissedAt > 120000 && other.hidden;
+            if (fixShown) q('.tap').hidden = true;
+            if (fixShown) {
+                q('.fix .fmsg').textContent = trouble === 'stalled'
+                    ? '⚠ 再生が止まっています' : '⚠ ホストとずれています';
+            }
+            q('.fix').hidden = !fixShown;
+            // ホストの広告の間はこちらを止めて待つ。止まった理由を真ん中に出す（2026-09-14 ユーザー報告: 再生されたと思ったらすぐ止まる）
+            q('.adwait').hidden = !(connected && hasHost && hostAd && !selfAd && !otherVideo && !hostHold && playerReady && !fixShown && q('.clock:not(.adwait)').hidden);
         }
         render();
     }
@@ -2306,14 +2408,39 @@ const WP_SHIM = (() => {
          */
         isInAd() { return this._presentingBreak() !== null; }
 
-        /** 広告枠の本編上の位置（ミリ秒）。番号で引く */
-        _breakContentMs(index) {
+        /**
+         * 広告枠の本編上の位置（ミリ秒）。
+         * 流れている枠そのものに locationMs があればそれを、無ければ番号（viewableAdBreakIndex / index）で一覧から引く。
+         * 以前は index だけで引いていて、名前が違うと目印が足されず、生の位置（広告込み）をそのまま本編の時間として
+         * 送っていた疑いがある（2026-09-14 ユーザー報告: Netflix でゲストが数分先へずれた）
+         */
+        _breakContentMs(brk) {
+            if (brk && Number.isFinite(brk.locationMs)) return brk.locationMs;
             const am = this._adManager();
-            if (!am) return null;
+            if (!am || !brk) return null;
+            const index = Number.isFinite(brk.viewableAdBreakIndex) ? brk.viewableAdBreakIndex : brk.index;
             try {
                 const hit = (am.getAds() || []).find(a => a.viewableAdBreakIndex === index);
                 return hit && Number.isFinite(hit.locationMs) ? hit.locationMs : null;
             } catch { return null; }
+        }
+
+        /**
+         * 流し終わった広告枠の { 本編上の位置（秒）, 長さ（秒） }。
+         * 枠の duration（{ ticks, timescale }）に、実際に流れた広告の長さが入る（本物の Netflix で形を確認。
+         * 自動操作の Edge では広告が流れず 0 だったので、長さが入っているものだけ使う）
+         */
+        _playedBreaks() {
+            const am = this._adManager();
+            if (!am) return [];
+            let list = [];
+            try { list = am.getAds() || []; } catch { return []; }
+            const sec = (d) => (d && Number.isFinite(d.ticks) && Number.isFinite(d.timescale) && d.timescale > 0 ? d.ticks / d.timescale : 0);
+            return list
+                .filter(b => b && (b.hasCompletedPlayback || b.hasPlayed) && Number.isFinite(b.locationMs))
+                .map(b => ({ at: b.locationMs / 1000, len: sec(b.duration) || sec(b.normalizedAdsDuration) }))
+                .filter(b => b.len > 0.5 && b.len < 600)
+                .sort((a, b) => a.at - b.at);
         }
 
         /**
@@ -2335,8 +2462,8 @@ const WP_SHIM = (() => {
                 // 広告の出入りの記録は bridge.js が別に書いている（ここで書くと二重になる）
                 if (brk && !this._adOpen) {
                     this._adOpen = {
-                        index: brk.index,
-                        contentMs: this._breakContentMs(brk.index),
+                        index: Number.isFinite(brk.viewableAdBreakIndex) ? brk.viewableAdBreakIndex : brk.index,
+                        contentMs: this._breakContentMs(brk),
                         rawStart: this._rawTime()
                     };
                 } else if (!brk && this._adOpen) {
@@ -2366,6 +2493,13 @@ const WP_SHIM = (() => {
             if (this._adOpen && Number.isFinite(this._adOpen.contentMs)) {
                 return this._adOpen.contentMs / 1000;
             }
+            // 流し終わった枠の長さが分かれば、それを引く（目印が足されなかったときも正しく出せる）
+            const played = this._playedBreaks();
+            if (played.length) {
+                let offset = 0;
+                for (const b of played) { if (b.at <= raw - offset - b.len + 0.5) offset += b.len; }
+                return Math.max(0, raw - offset);
+            }
             let best = this._anchors[0];
             for (const a of this._anchors) { if (a.raw <= raw + 0.001) best = a; }
             return Math.max(0, best.content + (raw - best.raw));
@@ -2373,6 +2507,10 @@ const WP_SHIM = (() => {
 
         /** 本編の時間 → 生の位置 */
         _toRaw(content) {
+            const played = this._playedBreaks();
+            if (played.length) {
+                return Math.max(0, content + played.filter(b => b.at <= content + 0.001).reduce((sum, b) => sum + b.len, 0));
+            }
             let best = this._anchors[0];
             for (const a of this._anchors) { if (a.content <= content + 0.001) best = a; }
             return Math.max(0, best.raw + (content - best.content));
@@ -2385,17 +2523,47 @@ const WP_SHIM = (() => {
                 try { hasAds = am.hasAds(); } catch { /* 取れない */ }
                 try { canSeek = am.canSeek(); } catch { /* 取れない */ }
                 try {
-                    ads = (am.getAds() || []).map(a => ({
-                        i: a.viewableAdBreakIndex,
-                        atSec: Math.round(a.locationMs / 100) / 10,
-                        played: Boolean(a.hasCompletedPlayback)
-                    }));
+                    /*
+                     * 広告枠に入っている数と真偽を全部出す（2026-09-14）。ホストもゲストも数分ずれた報告があり、
+                     * 生の位置にまだ流れていない広告も含まれている（Prime と同じ）のではと疑っている。
+                     * 枠の長さがどの名前で入っているか、自動操作の Edge では広告が出ないので実際の記録で確かめる
+                     */
+                    ads = (am.getAds() || []).slice(0, 20).map(a => {
+                        const o = { i: a.viewableAdBreakIndex, atSec: Math.round(a.locationMs / 100) / 10, played: Boolean(a.hasCompletedPlayback) };
+                        for (const k of Object.keys(a || {}).slice(0, 30)) {
+                            const v = a[k];
+                            if (typeof v === 'number' && Number.isFinite(v)) o[k] = Math.round(v);
+                            else if (typeof v === 'boolean') o[k] = v;
+                            else if (v && typeof v === 'object' && Number.isFinite(v.ticks)) o[k] = Math.round(v.ticks / (v.timescale || 1) * 10) / 10;
+                            else if (Array.isArray(v)) o[k + '#'] = v.length;
+                        }
+                        return o;
+                    });
                 } catch { /* 取れない */ }
             }
             let sessions = [];
             try { sessions = (this._videoPlayerApi()?.getAllPlayerSessionIds() || []).map(String); } catch { /* 未読み込み */ }
             const raw = this._rawTime();
+            const v = this._video;
+            let segmentTime = null;
+            try { const ms = this._player?.getSegmentTime?.(); segmentTime = Number.isFinite(ms) ? Math.round(ms / 100) / 10 : null; } catch { /* 無い */ }
+            let presenting = null;
+            try {
+                const b = this._presentingBreak();
+                if (b) {
+                    presenting = {};
+                    for (const k of Object.keys(b).slice(0, 30)) {
+                        const x = b[k];
+                        if (typeof x === 'number' || typeof x === 'boolean') presenting[k] = x;
+                        else if (x && typeof x === 'object' && Number.isFinite(x.ticks)) presenting[k] = Math.round(x.ticks / (x.timescale || 1) * 10) / 10;
+                    }
+                }
+            } catch { /* 取れない */ }
             return {
+                // 調査用: getSegmentTime（本編だけの位置かもしれない）、流れている枠の中身、流し終わった枠の長さ
+                segmentTime, presenting, played: this._playedBreaks(),
+                videoTime: v ? Math.round(v.currentTime * 10) / 10 : null,
+                videoDuration: v && Number.isFinite(v.duration) ? Math.round(v.duration) : null,
                 sessionId: this._sessionId,
                 sessions,
                 rawTime: Math.round(raw * 10) / 10,
@@ -2927,8 +3095,14 @@ const WP_SHIM = (() => {
 
     function postStatus() {
         const v = adapter && adapter._video;
+        let t = null;
+        try { t = adapter ? adapter.getCurrentTime() : null; } catch { /* 未準備 */ }
         post('STATUS', {
             selfAd, hostAd, hostPaused,
+            // ずれの見張り（2026-09-14）: 自分の本編の位置と止まっているか。友達の画面（スクリプト）がホストの位置と比べる
+            t: Number.isFinite(t) ? Math.round(t * 10) / 10 : null,
+            paused: adapter ? adapter.isPaused() : null,
+            nf: adapter && adapter.constructor.service === 'netflix' && bound ? adapter.describeForDiag() : null,
             plan: adapter && typeof adapter.planSummary === 'function' ? adapter.planSummary() : null,
             // 記録用: 動画の読み込みの状態と、立て直しの回数（止まったまま動かない件の調査）
             diag: v ? {
@@ -2968,8 +3142,12 @@ const WP_SHIM = (() => {
             // 少し待ってからホストの今の位置を取り直す（届いたら位置を合わせて再生する）
             setTimeout(() => post('READY', pageInfo()), 600);
         }, 1000);
-        // 記録用に、止まっている間はときどき状態を送り直す
+        // ずれの見張りと記録のために、ときどき状態を送り直す
         setInterval(() => { if (bound && !isHost) postStatus(); }, 5000);
+        // Netflix のホストの広告の様子を記録に残す（数分ずれた件の調査。2026-09-14）
+        setInterval(() => {
+            if (bound && isHost && adapter.constructor.service === 'netflix') post('DIAG', { event: 'nf-state', ...adapter.describeForDiag() });
+        }, 30000);
     }
 
     function setHostState(next) {
