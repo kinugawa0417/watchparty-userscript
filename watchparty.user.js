@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.6
+// @version      0.24.7
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.6";
+    const __WP_VERSION__ = "0.24.7";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1678,8 +1678,24 @@ const WP_SHIM = (() => {
                 v.duration >= MIN_MAIN_DURATION_SEC
             );
             if (usable.length === 0) return null;
+            if (usable.length === 1) return usable[0];
 
-            return usable.reduce((a, b) => (b.duration > a.duration ? b : a));
+            /*
+             * 本編の長さの <video> が複数あるとき（2026-09-16 実機: ホストがただ流しているだけで、ゲストが何度も冒頭へ戻された）。
+             * Amazon は見えない所に同じ作品の <video> を用意していることがあり、長さだけで選ぶと、1秒ごとの選び直しで
+             * 見えない方（位置 0）に乗り換え、その 0 秒をゲストへ送っていた。
+             * 画面に出ていて、読み込みが済んで再生中のものを選ぶ。今掴んでいるものがそうなら乗り換えない
+             */
+            const score = (v) => {
+                const r = v.getBoundingClientRect();
+                return (r.width >= 50 && r.height >= 50 ? 4 : 0) + (!v.paused ? 2 : 0) + (v.readyState >= 2 ? 1 : 0);
+            };
+            const cur = this._video && usable.includes(this._video) ? this._video : null;
+            let best = cur;
+            for (const v of usable) {
+                if (!best || score(v) > score(best) || (score(v) === score(best) && v !== cur && v.duration > best.duration)) best = v;
+            }
+            return best;
         }
 
         _bind(video) {
@@ -2859,6 +2875,8 @@ const WP_SHIM = (() => {
     const STUCK_MS = 20000;
     const KICK_GAP_MS = 20000;
     let lastApplyAt = 0;
+    let lastTickTime = 0;
+    let zeroTickOnce = false;
     let stuck = { lastT: null, movedAt: 0, kickAt: 0, kicks: 0, failed: 0 };
     /*
      * 続けて立て直せなかったら、それ以上は自動でやらない（2026-09-15 実機の記録）。
@@ -2905,12 +2923,23 @@ const WP_SHIM = (() => {
             return;
         }
         const diff = target - adapter.getCurrentTime();
+        /*
+         * 先へ飛んで動き出したあと、ホストより少し先にいる分（読み込みが見込みより早かった分）は、その秒数だけ止まって待つ。
+         * しきい値（2秒）より小さい先行は飛び直しでは直らず、残っていた（2026-09-16 テスト: ホストの広告で止まる場面が 1.8 秒ずれた）
+         */
+        if (settle && settle.started && settle.lead > 0 && !settle.trimmed && diff < -0.4 && diff > -(settle.lead + 2)) {
+            settle.trimmed = true;
+            adapter.pause();
+            const waitMs = Math.round(-diff * 1000);
+            setTimeout(() => { if (!hostPaused && !hostAd) withEchoGuard(() => adapter.play()); }, waitMs);
+            return;
+        }
         if (Math.abs(diff) > threshold) {
             // 大きく離れている・まだ流れていないときは読み込みが要るので、その分だけ先へ
             const smooth = !adapter.isPaused() && now - rawMovedAt < 2000;
             const lead = Math.abs(diff) > 8 || !smooth ? loadLeadSec : 0;
             adapter.seek(target + lead);
-            settle = { at: now, started: false, lead };
+            settle = { at: now, started: false, lead, target };
             post('DIAG', { event: 'catch-up', url: location.href, target: Math.round(target), lead, diff: Math.round(diff) });
         }
         if (adapter.isPaused()) adapter.play();
@@ -3012,6 +3041,8 @@ const WP_SHIM = (() => {
     function apply({ type, currentTime, timestamp, paused, ad } = {}) {
         if (!bound) return;
         if (typeof currentTime !== 'number' || !Number.isFinite(currentTime)) return;
+        // 直前の定期通知の位置（0 秒の知らせを1回だけ見送るため）
+        if (type !== 'tick' || currentTime >= 5) { lastTickTime = currentTime; zeroTickOnce = false; }
         lastApplyAt = Date.now();
 
         // ホストが広告中かは定期通知で分かる。広告中のホストは操作を送らないので、
@@ -3060,6 +3091,9 @@ const WP_SHIM = (() => {
                 if (!hostPaused) settle = { at: Date.now(), started: false, lead: 0 };
                 if (wasPaused) adapter.pause();
             });
+        } else if (type === 'tick' && currentTime < 5 && lastTickTime >= 30 && !zeroTickOnce) {
+            zeroTickOnce = true;
+            return;
         } else if (type === 'tick') {
             // ホストの状態の定期通知。大きくズレていれば合わせる。
             if (targetPauseTime !== null) {
@@ -3079,7 +3113,8 @@ const WP_SHIM = (() => {
             if (paused || ad) {
                 // ホストは止まっている、または広告中（本編は進まない）→ 同じ位置で止まって待つ
                 withEchoGuard(() => {
-                    const drifted = Math.abs(adapter.getCurrentTime() - currentTime) > WP.DRIFT_THRESHOLD_SEC;
+                    // 止まって待つときは細かく合わせる（飛んでも再生中の読み込みにならない。追いつくときに少し先へ飛んだ分が残らないように）
+                    const drifted = Math.abs(adapter.getCurrentTime() - currentTime) > WP.SEEK_THRESHOLD_SEC;
                     if (drifted) adapter.seek(currentTime);
                     // シーク後の自動再開に備え、シークしたときは止まっていても止め直す
                     if (drifted || !adapter.isPaused()) adapter.pause();
@@ -3299,11 +3334,42 @@ const WP_SHIM = (() => {
      * 停止中も送る。Amazon は作品ページを開いた時点で本編を「続きの位置で停止」の状態で
      * 用意しており、この初期状態ではイベントが一切出ないため、送らないとゲストが知る手段がない。
      */
+    /*
+     * 一瞬だけ 0 秒を読んだときは送らない（2026-09-16 iPhone 実機: ゲストが一瞬最初に戻る巻き戻しが頻発し、すぐ合った）。
+     * Amazon は再生中に <video> を差し替えたり読み込み直したりし、その間は位置が 0 に読める。
+     * それを送るとゲストが冒頭へ飛び、次の知らせ（5秒後）で戻っていた。
+     * 20 秒以上先を見ていたのに急に 1.5 秒未満になったら、6 秒続くまで（本当に最初へ戻したのでなければ）送らない
+     */
+    let lastGoodT = 0;
+    let zeroSince = 0;
+    function bogusZero(t) {
+        const now = Date.now();
+        if (!Number.isFinite(t) || t >= 1.5) { if (Number.isFinite(t)) lastGoodT = t; zeroSince = 0; return false; }
+        if (lastGoodT < 20) return false;
+        if (!zeroSince) {
+            zeroSince = now;
+            // 記録: 何が 0 に読めたのか（2026-09-16 実機: ホストがただ流しているだけで、約1分ごとにゲストが冒頭へ戻された）
+            const v = adapter._video;
+            post('DIAG', {
+                event: 'zero-read', t, lastGoodT, raw: v ? Math.round(v.currentTime * 10) / 10 : null,
+                rs: v ? v.readyState : null, dur: v ? Math.round(v.duration) : null, paused: v ? v.paused : null,
+                seeking: v ? v.seeking : null, videos: document.querySelectorAll('video').length,
+                plan: typeof adapter.planSummary === 'function' ? adapter.planSummary() : null
+            });
+        }
+        if (now - zeroSince < 6000) return true;
+        lastGoodT = t;
+        zeroSince = 0;
+        return false;
+    }
+
     function beat() {
         if (!bound || applying) return;
+        const t = adapter.getCurrentTime();
+        if (bogusZero(t)) return;
         post('PLAYER_EVENT', {
             type: 'tick',
-            currentTime: adapter.getCurrentTime(),
+            currentTime: t,
             paused: adapter.isPaused(),
             // 広告中は本編が止まっているので、ゲストは止まって待つことになる。表示用に伝える
             ad: adapter.isInAd(),
@@ -3362,6 +3428,15 @@ const WP_SHIM = (() => {
             const advancing = rawLast !== null && loaded && !adapter.isPaused() && step > 0.3 && step < 2;
             if (advancing && settle && !settle.started) {
                 settle.started = true;
+                // 動き出した瞬間に、ホストより先にいる分（見込みより早く読めた分）だけ止まって待つ
+                if (settle.lead > 0 && Number.isFinite(settle.target) && !hostPaused && !hostAd) {
+                    const ahead = t - (settle.target + (now - settle.at) / 1000);
+                    if (ahead > 0.3 && ahead < settle.lead + 2) {
+                        settle.trimmed = true;
+                        withEchoGuard(() => adapter.pause());
+                        setTimeout(() => { if (!hostPaused && !hostAd) withEchoGuard(() => adapter.play()); }, Math.round(ahead * 1000));
+                    }
+                }
                 // 飛んでから動き出すまでの時間 → 次に先へ飛ぶ量（1〜10秒。少しずつ覚え直す）
                 const took = (now - settle.at) / 1000;
                 loadLeadSec = Math.max(1, Math.min(10, loadLeadSec * 0.5 + (took + 0.5) * 0.5));
@@ -3519,6 +3594,7 @@ const WP_SHIM = (() => {
             // 広告中の操作（シークバーを動かす等）は送らない。送るとゲストの広告が止まる。
             // 広告明けに本編が動き出したときの play で、ゲストはその位置に合わせられる
             if (adapter.isInAd()) return;
+            if (bogusZero(evt.currentTime)) return;   // 読み込み直しの一瞬の 0 秒を「巻き戻し」として送らない
             post('PLAYER_EVENT', { ...evt, timestamp: Date.now() });
         });
         // アダプタが自分で見つけた「記録しておきたいこと」（Netflix の広告の手がかりなど）
