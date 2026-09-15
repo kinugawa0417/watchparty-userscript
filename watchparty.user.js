@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.1
+// @version      0.24.2
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.1";
+    const __WP_VERSION__ = "0.24.2";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -416,6 +416,14 @@ const WP_SHIM = (() => {
          * ずれが大きい・止まったままが続いたら、真ん中に「立て直す」を大きく出す。ホストの参加者一覧にも出る（sync-report）
          */
         let hostRef = null;
+        /** ホストの操作のお知らせ（「ホストがスキップしました」など）。数秒だけ状態の表示に出す（2026-09-15 ユーザー要望） */
+        let hostEvent = null;
+        const HOST_EVENT_MS = 6000;
+        function noteHostEvent(text) {
+            hostEvent = { text, until: Date.now() + HOST_EVENT_MS };
+            U.showNotice(q('.notice'), text);
+            setTimeout(render, HOST_EVENT_MS + 50);
+        }
         let hostVideo = null;       // ホストのいまの作品（立て直すときに開き直す）
         let mine = null;
         let nfDiag = null;
@@ -423,7 +431,13 @@ const WP_SHIM = (() => {
         let trouble = null;         // 'drift' | 'stalled' | null
         let fixDismissedAt = 0;
         let lastSyncReportAt = 0;
-        const TROUBLE_SHOW_MS = 20000;
+        /*
+         * 立て直しを出すまでの時間。立て直しを押して開き直した直後（2分以内）なら短くする
+         * （2026-09-15 PC の Chrome: 何回か押すと直った。2回目以降を早く出す）
+         */
+        const FIX_KEY = 'wp:lastFix';
+        const recentFix = (() => { try { return Date.now() - Number(sessionStorage.getItem(FIX_KEY) || 0) < 120000; } catch { return false; } })();
+        const TROUBLE_SHOW_MS = recentFix ? 10000 : 20000;
         const DRIFT_SHOW_SEC = 8;
         let contentT = null;
 
@@ -506,9 +520,21 @@ const WP_SHIM = (() => {
             if (!p || typeof p !== 'object' || !SYNC_TYPES.has(p.type)) return;
             const sec = U.cleanSec(p.currentTime);
             if (sec === null) return;
+            const wasPlaying = hostPlaying;
             if (p.type === 'play') hostPlaying = true;
             else if (p.type === 'pause') hostPlaying = false;
             else if (p.type === 'tick') { hostPlaying = !p.paused && !p.ad; hostAd = Boolean(p.ad); }
+            // ホストの操作を知らせる。移動は、直前に分かっていたホストの位置からの差で「スキップ」「巻き戻し」を分ける
+            if (hostRef && !p.ad) {
+                const expected = hostRef.t + (wasPlaying ? (Date.now() - hostRef.at) / 1000 : 0);
+                const jump = sec - expected;
+                if (p.type === 'seek' || (p.type === 'tick' && Math.abs(jump) > 8)) {
+                    if (jump > 3) noteHostEvent('⏩ ホストがスキップしました');
+                    else if (jump < -3) noteHostEvent('⏪ ホストが巻き戻しました');
+                }
+            }
+            if (wasPlaying && !hostPlaying && !hostAd && p.type !== 'seek') noteHostEvent('⏸ ホストが一時停止しました');
+            else if (!wasPlaying && hostPlaying && p.type === 'play') noteHostEvent('▶ ホストが再生しました');
             hostRef = { t: sec, at: Number.isFinite(p.timestamp) && Math.abs(p.timestamp - Date.now()) < 60000 ? p.timestamp : Date.now() };
             if (!otherVideo && !hostHold && !waitingGesture()) {
                 toBridge('APPLY', {
@@ -673,6 +699,9 @@ const WP_SHIM = (() => {
                 .pop { border: 0; border-radius: 8px; background: rgba(58,58,70,.6); color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; cursor: pointer; }
                 .panel[data-place="side"] input { background: rgba(20,20,26,.55); border-color: rgba(255,255,255,.2); }
                 .panel[data-place="side"] .close { background: rgba(58,58,70,.6); }
+                /* iPhone で打っている間の狭いチャット欄: 入力欄と直近の発言だけ */
+                .panel[data-tight="1"] .phead, .panel[data-tight="1"] .notice { display: none; }
+                .panel[data-tight="1"] { gap: 4px; padding: 6px; }
                 .phead { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9a9aa6; }
                 .phead span { flex: 1; }
                 .close { border: 0; border-radius: 8px; background: #3a3a46; color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; }
@@ -785,6 +814,7 @@ const WP_SHIM = (() => {
             if (video) shiftUp(video, portrait, visibleTop());
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
             if (playerShown && !open && !userClosed) setOpen(true);
+            if (!IS_ANDROID && !IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
             /*
              * 置き場所の計算し直しは、画面の大きさや映像の位置が変わったときだけ（2026-09-14）。
              * チャット欄を開いたまま毎秒計算し直すと、本物の Prime でゲストが 3〜4 秒遅れた（止めると 0.7 秒）
@@ -796,6 +826,45 @@ const WP_SHIM = (() => {
             if (sig !== lastLayoutSig) {
                 lastLayoutSig = sig;
                 placePanel();
+            }
+        }
+
+        /*
+         * iPhone の再生画面で、映像をずらしたあとに見えてしまう Amazon の部品（ウォッチリスト・好きでない・次のエピソード・関連コンテンツなど）を隠す
+         * （2026-09-15 ユーザー報告: 映っていて押せてしまう）。プレイヤーの外枠の外にある、ページの他の部分を見えなく・押せなくする。
+         * 外枠の中でも、映像に重ならない所にある同じ名前のボタンは隠す。再生画面でなくなったら元に戻す。
+         * Android は映像や外枠に触ると再生できなくなったので、ここも触らない
+         */
+        const tidied = new Set();
+        const TIDY_LABEL = /ウォッチリスト|好きでない|好き|次のエピソード|関連|エピソード|詳細|シェア|ダウンロード|評価/;
+        function hideEl(el) {
+            if (tidied.has(el)) return;
+            el.style.setProperty('visibility', 'hidden', 'important');
+            el.style.setProperty('pointer-events', 'none', 'important');
+            tidied.add(el);
+        }
+        function tidyAround(video) {
+            if (!video) {
+                for (const el of tidied) { el.style.removeProperty('visibility'); el.style.removeProperty('pointer-events'); }
+                tidied.clear();
+                return;
+            }
+            const frame = playerFrame(video);
+            const fr = frame.getBoundingClientRect();
+            const cr = contentRect(video);
+            const overlaps = (a, b) => a.width > 0 && a.height > 0 && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+            // 外枠からページの一番上までの、それぞれの兄弟（外枠と重ならないもの）
+            for (let node = frame; node && node.parentElement && node !== document.body; node = node.parentElement) {
+                for (const sib of node.parentElement.children) {
+                    if (sib === node || sib === host || sib.contains(host) || /^(SCRIPT|STYLE|LINK)$/.test(sib.tagName)) continue;
+                    if (!overlaps(sib.getBoundingClientRect(), fr)) hideEl(sib);
+                }
+            }
+            // 外枠の中の、映像に重ならない所のボタン（名前で見分ける）
+            for (const el of frame.querySelectorAll('button, a, [role="button"], [role="tab"]')) {
+                const name = `${el.textContent || ''} ${el.getAttribute('aria-label') || ''}`;
+                if (!TIDY_LABEL.test(name)) continue;
+                if (!overlaps(el.getBoundingClientRect(), { left: cr.left, right: cr.left + cr.width, top: cr.top, bottom: cr.bottom })) hideEl(el);
             }
         }
 
@@ -827,11 +896,22 @@ const WP_SHIM = (() => {
                 panel.style.bottom = 'auto';
                 panel.style.height = `${room}px`;
                 panel.dataset.place = 'below-video';
+                panel.dataset.tight = '';
                 panel.style.left = ''; panel.style.width = '';
             } else {
                 panel.style.top = 'auto';
                 panel.style.bottom = `${Math.max(8, window.innerHeight - viewTop - viewH + 8)}px`;
-                panel.style.height = `${Math.round(Math.min(viewH * 0.45, 420))}px`;
+                /*
+                 * iPhone で打っている間（キーボードが出て、見えている範囲が狭い）は、映像の下の残りだけに収める（2026-09-15 ユーザー要望:
+                 * 打つパネルで映画が追いやられた。映像の下が少し切れる程度にしたい）。入力欄の分（約 60px）より狭くはしない。
+                 * 狭いときは見出しとお知らせを隠して、入力欄と直近の発言だけにする。Android は今までどおり
+                 */
+                const composing = !IS_ANDROID && !IS_DESKTOP && root.activeElement === q('input');
+                const h = composing && r && r.height > 0
+                    ? Math.max(60, Math.min(Math.round(viewH * 0.45), Math.round(viewH - r.height - 12)))
+                    : Math.round(Math.min(viewH * 0.45, 420));
+                panel.style.height = `${h}px`;
+                panel.dataset.tight = composing && h < 140 ? '1' : '';
                 panel.dataset.place = 'overlay';
                 panel.style.left = ''; panel.style.width = '';
             }
@@ -1005,6 +1085,10 @@ const WP_SHIM = (() => {
             userClosed = true;
             setOpen(false);
         });
+        // 打ち始め・打ち終わりで、チャット欄の大きさを測り直す（キーボードの出入りより先に来ることがあるので少し後にも）
+        for (const ev of ['focus', 'blur']) {
+            q('input').addEventListener(ev, () => { placePanel(); setTimeout(placePanel, 350); setTimeout(placePanel, 800); });
+        }
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
             const input = q('input');
@@ -1098,6 +1182,7 @@ const WP_SHIM = (() => {
          * 開き直すとプレイヤーが最初から読み込み直すので、読み込みが止まった状態からも抜けられる
          */
         function fixPlayback() {
+            try { sessionStorage.setItem(FIX_KEY, String(Date.now())); } catch { /* 使えない設定 */ }
             socket.emit('sync-report', { drift: null, stalled: trouble === 'stalled', t: mine ? mine.t : null, service: PAGE_SERVICE, fix: true, nf: nfDiag });
             const url = hostVideo && hostVideo.service === PAGE_SERVICE ? reopenUrl(hostVideo) : null;
             setTimeout(() => { if (url) location.href = url; else location.reload(); }, 200);
@@ -1119,6 +1204,8 @@ const WP_SHIM = (() => {
                 : otherVideo ? 'ホストが別の作品に変えました'
                 : selfAd ? '広告のあと、ホストに合わせます'
                 : hostAd ? 'ホストの広告が終わるのを待っています'
+                : hostEvent && Date.now() < hostEvent.until ? hostEvent.text
+                : hostRef && !hostPlaying && playerReady ? '⏸ ホストが一時停止しています'
                 : !playerReady ? (Date.now() - openedAt > 10000
                     ? '動画が始まらないときは、画面の再生ボタンを押してください' : '動画が始まるのを待っています')
                 // 広告の入った動画で、まだ画面の時間表示で答え合わせできていない（操作ボタンを出してもらうと読める。2026-09-14）
