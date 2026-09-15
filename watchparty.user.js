@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.3
+// @version      0.24.4
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.3";
+    const __WP_VERSION__ = "0.24.4";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -533,8 +533,9 @@ const WP_SHIM = (() => {
                     else if (jump < -3) noteHostEvent('⏪ ホストが巻き戻しました');
                 }
             }
-            if (wasPlaying && !hostPlaying && !hostAd && p.type !== 'seek') noteHostEvent('⏸ ホストが一時停止しました');
-            else if (!wasPlaying && hostPlaying && p.type === 'play') noteHostEvent('▶ ホストが再生しました');
+            // 入った直後（ホストの位置をまだ知らない）の知らせでは出さない（入っただけで「ホストが再生しました」と出ていた）
+            if (hostRef && wasPlaying && !hostPlaying && !hostAd && p.type !== 'seek') noteHostEvent('⏸ ホストが一時停止しました');
+            else if (hostRef && !wasPlaying && hostPlaying && p.type === 'play') noteHostEvent('▶ ホストが再生しました');
             hostRef = { t: sec, at: Number.isFinite(p.timestamp) && Math.abs(p.timestamp - Date.now()) < 60000 ? p.timestamp : Date.now() };
             if (!otherVideo && !hostHold && !waitingGesture()) {
                 toBridge('APPLY', {
@@ -659,7 +660,6 @@ const WP_SHIM = (() => {
                        color: #fff; font: 700 18px/1.5 -apple-system, system-ui, sans-serif; box-shadow: 0 6px 24px rgba(0,0,0,.6); max-width: min(92vw, 460px); }
                 .fix button { display: block; width: 100%; margin-top: 10px; border: 0; border-radius: 12px; cursor: pointer;
                               font: 700 20px/1.3 -apple-system, system-ui, sans-serif; padding: 14px 18px; color: #fff; background: #3a6df0; }
-                .fix .hint { font-size: 13px; font-weight: 600; color: #d8d8e0; margin-top: 6px; line-height: 1.5; }
                 .fix .later { background: transparent; font-size: 14px; padding: 6px; margin-top: 4px; color: #c8c8d0; }
                 .refix { border: 0; border-radius: 8px; background: rgba(58,58,70,.6); color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; cursor: pointer; }
                 .tap { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 6;
@@ -736,7 +736,7 @@ const WP_SHIM = (() => {
             <button class="tap" hidden>▶ タップして再生</button>
             <div class="clock" hidden></div>
             <div class="clock adwait" hidden>⏸ ホストが広告を見ています<small>終わると自動で再開します（止まっているのは故障ではありません）</small></div>
-            <div class="fix" hidden><div class="fmsg"></div><div class="hint" hidden></div><button class="go" type="button">🔄 再生を立て直す</button><button class="later" type="button">このまま見る</button></div>
+            <div class="fix" hidden><div class="fmsg"></div><button class="go" type="button">🔄 再生を立て直す</button><button class="later" type="button">このまま見る</button></div>
             <div class="top">
                 <button class="update" hidden></button>
             </div>
@@ -1294,12 +1294,6 @@ const WP_SHIM = (() => {
             if (fixShown) {
                 q('.fix .fmsg').textContent = trouble === 'stalled'
                     ? '⚠ 再生が止まっています' : '⚠ ホストとずれています';
-                // Prime で止まったままのとき: 同じアカウントで同じ作品を同時に見られるのは2台まで（ホストも数える）
-                const limitHint = PAGE_SERVICE === 'prime' && trouble === 'stalled';
-                q('.fix .hint').textContent = limitHint
-                    ? '同じ Amazon アカウントで同じ作品を同時に再生できるのは2台までです（ホストの端末も数えます）。ほかの端末で止めるか、別のアカウントで見てください。'
-                    : '';
-                q('.fix .hint').hidden = !limitHint;
             }
             q('.fix').hidden = !fixShown;
             // ホストの広告の間はこちらを止めて待つ。止まった理由を真ん中に出す（2026-09-14 ユーザー報告: 再生されたと思ったらすぐ止まる）
@@ -2831,28 +2825,52 @@ const WP_SHIM = (() => {
     let isHost = false;          // ui.js から教わる（このスクリプトは拡張機能の状態を直接見られない）
     let lastTickDropReport = 0;  // 調査用（follow から抜けられない件）。記録の間引きに使う
     /*
-     * 定期通知で位置を合わせた先と時刻（2026-09-14）。飛んだ先の読み込み中（まだ進んでいない）に次の通知で
-     * また先へ飛ばすと、読み込みが終わらずくるくる回ったままになった（PC の Chrome、ホストが先へ飛ばしたとき）。
-     * 飛ばした先から動き出すまでは、しばらく飛ばし直さない
-     */
-    let tickSeek = null;
-    const TICK_SEEK_SETTLE_MS = 15000;
-    /*
      * ゲストの動画が止まったまま動かないときの立て直し（2026-09-14 PC の Chrome）。
      * ホストは再生中なのに、ゲストの動画が読み込み中のくるくるのまま1分以上動かなかった。
      * ホストが一時停止→再生すると直った（ゲストが「止める→位置を合わせて再生」をやり直したため）。
-     * 同じことを自動でやる: 一定時間動かなければ、いったん止めてホストの今の位置を取り直す
+     * 同じことを自動でやる: 一定時間（20秒。読み込みを待つ間は数えない）動かなければ、いったん止めてホストの今の位置を取り直す
      */
-    const STUCK_MS = 8000;
+    const STUCK_MS = 20000;
     const KICK_GAP_MS = 20000;
     let lastApplyAt = 0;
     let stuck = { lastT: null, movedAt: 0, kickAt: 0, kicks: 0, failed: 0 };
     /*
      * 続けて立て直せなかったら、それ以上は自動でやらない（2026-09-15 実機の記録）。
-     * 同じ Amazon アカウントで同じ作品を同時に再生できるのは2台まで。3台目（ホスト＋スマホ2台など）は読み込みのまま動かず、
-     * 自動の立て直し（止める→再生）を繰り返すと、端末どうしで再生の権利を取り合って、どれも落ち着かなかった
+     * 立て直し（止める→位置を取り直して再生）は読み込みを最初からやり直させるので、繰り返すと余計に落ち着かなかった
      */
     const KICK_MAX_FAILED = 2;
+    /*
+     * ホストの再生中に追いつくとき（2026-09-15 ユーザー報告: PC の Chrome で、ホストが再生中だとゲストがくるくる回ったまま。
+     * ホストが止まっていれば再生が始まって合う）。
+     * 動いているホストの位置へ飛ぶと、読み込んでいる間にホストが先へ進み、次の知らせでまた飛ぶ…を繰り返して読み込みが終わらなかった。
+     * そこで、読み込みにかかる時間ぶん先へ飛び、動き出すまで（最長 SETTLE_MS）は飛び直さずに待つ。
+     * 先へ飛ぶ量は、実際に動き出すまでにかかった時間から覚え直す（はじめは 3 秒）
+     */
+    const SETTLE_MS = 20000;
+    let settle = null;          // { at: 飛んだ時刻, started: 動き出したか }
+    let loadLeadSec = 3;
+    let rawLast = null;         // 生の再生位置の見張り（本編の時間の換算に左右されない）
+    let rawMovedAt = 0;
+
+    /** ホストの位置（本編の時間）へ追いつく。ホストが再生中のときだけ使う */
+    function catchUp(target, threshold) {
+        const now = Date.now();
+        if (settle && !settle.started && now - settle.at < SETTLE_MS) {
+            // 飛んだ先で読み込み中。飛び直さず、再生の指示だけ出して待つ
+            if (adapter.isPaused()) adapter.play();
+            return;
+        }
+        const diff = target - adapter.getCurrentTime();
+        if (Math.abs(diff) > threshold) {
+            // 大きく離れている・まだ流れていないときは読み込みが要るので、その分だけ先へ
+            const smooth = !adapter.isPaused() && now - rawMovedAt < 2000;
+            const lead = Math.abs(diff) > 8 || !smooth ? loadLeadSec : 0;
+            adapter.seek(target + lead);
+            settle = { at: now, started: false, lead };
+            post('DIAG', { event: 'catch-up', url: location.href, target: Math.round(target), lead, diff: Math.round(diff) });
+        }
+        if (adapter.isPaused()) adapter.play();
+    }
 
     function post(type, payload) {
         window.postMessage({ source: WP.SRC_BRIDGE, type, payload }, location.origin);
@@ -2976,12 +2994,7 @@ const WP_SHIM = (() => {
         if (type === 'play') {
             stopFollowing();
             const target = currentTime + lag;
-            withEchoGuard(() => {
-                if (Math.abs(adapter.getCurrentTime() - target) > WP.SEEK_THRESHOLD_SEC) {
-                    adapter.seek(target);
-                }
-                adapter.play();
-            });
+            withEchoGuard(() => catchUp(target, WP.SEEK_THRESHOLD_SEC));
         } else if (type === 'pause') {
             const gap = currentTime - adapter.getCurrentTime();
             if (gap > 0.2 && gap <= WP.FOLLOW_MAX_GAP_SEC && !adapter.isPaused()) {
@@ -2999,6 +3012,7 @@ const WP_SHIM = (() => {
                 // サービスによってはシーク後に勝手に再生を再開する（Prime がそう）。止まっていたなら止め直す
                 const wasPaused = adapter.isPaused();
                 adapter.seek(currentTime);
+                settle = { at: Date.now(), started: false, lead: 0 };
                 if (wasPaused) adapter.pause();
             });
         } else if (type === 'tick') {
@@ -3028,19 +3042,7 @@ const WP_SHIM = (() => {
                 return;
             }
             const target = currentTime + lag;
-            const now = adapter.getCurrentTime();
-            if (tickSeek && Date.now() - tickSeek.at < TICK_SEEK_SETTLE_MS && Math.abs(now - tickSeek.to) < 0.5) {
-                // さっき飛ばした先で、まだ読み込み中。待つ（再生の指示だけは出す）
-                withEchoGuard(() => { if (adapter.isPaused()) adapter.play(); });
-                return;
-            }
-            withEchoGuard(() => {
-                if (Math.abs(now - target) > WP.DRIFT_THRESHOLD_SEC) {
-                    adapter.seek(target);
-                    tickSeek = { at: Date.now(), to: adapter.getCurrentTime() };
-                }
-                if (adapter.isPaused()) adapter.play();
-            });
+            withEchoGuard(() => catchUp(target, WP.DRIFT_THRESHOLD_SEC));
         }
     }
 
@@ -3116,7 +3118,12 @@ const WP_SHIM = (() => {
         if (!adapter || adapter.constructor.service !== 'prime' || !isTop) return;
         if (typeof titleId !== 'string' || !GTI_RE.test(titleId)) return;
         clearInterval(episodeTimer);
-        const page = adapter.getContentId(location.href);
+        /*
+         * その話が入っているページ。再生を始めると Amazon はアドレスを別の ID（0J… など）に書き換えるので、
+         * いまのアドレスではなく、最後に送ったページの作品 ID を使う（2026-09-15 本物の Prime: 映画を再生してからルームを作ると、
+         * 書き換わった ID を「別のページ」とみなし、映画を「作品が変わりました」の保留にして、ゲストが合わせられなかった）
+         */
+        const page = lastPageContentId || adapter.getContentId(location.href);
         let tries = 0;
         /*
          * プレイヤーが画面に出てから決める。作品ページを開いただけでも、Amazon は「続きを観る」の話を
@@ -3132,10 +3139,12 @@ const WP_SHIM = (() => {
             if (Date.now() - openSince < EPISODE_PRELOAD_WAIT_MS) return;
             let pageGti = null;
             try { pageGti = adapter.getAppId(); } catch { /* ページの作りが変わった */ }
-            // ページの GTI がまだ読めないなら少し待つ（読めないままなら、アドレスが GTI でない限り話として扱う）
+            // 再生を始めるとページの埋め込み情報が読めなくなることがある。先に読めていたページの GTI を使う
+            pageGti = pageGti || pageAppId;
             if (!pageGti && ++tries < 10) return;
             clearInterval(episodeTimer);
-            const next = titleId !== pageGti && titleId !== page ? { gti: titleId, page } : null;
+            // ページの GTI が分からないままなら、話とはみなさない（映画を話と取り違えて保留にするより安全）
+            const next = pageGti && titleId !== pageGti && titleId !== page ? { gti: titleId, page } : null;
             const changed = (next && next.gti) !== (episode && episode.gti);
             episode = next;
             if (changed) {
@@ -3177,9 +3186,17 @@ const WP_SHIM = (() => {
     }
 
     /** 作品情報を送る。最上位フレームだけ（広告などの iframe が上書きしないように） */
+    /** 最後に送ったページの作品 ID（話ではなくページそのもの）と、そのページの GTI */
+    let lastPageContentId = null;
+    let pageAppId = null;
+
     function sendInfo() {
         if (!adapter || !isTop) return;
         const info = pageInfo();
+        if (!info.pageContentId && info.contentId && info.contentId !== lastPageContentId) {
+            lastPageContentId = info.contentId;
+            pageAppId = null;
+        }
         post('INFO', info);
         lookForAppId(info.contentId);
     }
@@ -3205,6 +3222,7 @@ const WP_SHIM = (() => {
             try { appId = adapter.getAppId(); } catch { /* ページの作りが変わった */ }
             if (appId) {
                 clearInterval(appIdTimer);
+                if (contentId === lastPageContentId) pageAppId = appId;
                 post('META', { contentId, appId });
             } else if (++tries >= 20) {
                 clearInterval(appIdTimer);
@@ -3287,6 +3305,18 @@ const WP_SHIM = (() => {
             if (!bound || isHost) return;
             const now = Date.now();
             const t = adapter.getCurrentTime();
+            const v = adapter._video;
+            const raw = v ? v.currentTime : t;
+            if (rawLast === null || Math.abs(raw - rawLast) > 0.2) {
+                if (rawLast !== null && !adapter.isPaused() && settle && !settle.started) {
+                    settle.started = true;
+                    // 飛んでから動き出すまでの時間 → 次に先へ飛ぶ量（1〜10秒。少しずつ覚え直す）
+                    const took = (now - settle.at) / 1000;
+                    loadLeadSec = Math.max(1, Math.min(10, loadLeadSec * 0.5 + (took + 0.5) * 0.5));
+                }
+                rawLast = raw;
+                rawMovedAt = now;
+            }
             if (stuck.lastT === null || Math.abs(t - stuck.lastT) > 0.2) {
                 // 立て直しのあと 10 秒以上ちゃんと進んだら、失敗の数を戻す
                 if (stuck.failed && now - stuck.kickAt > 10000 && !adapter.isPaused()) stuck.failed = 0;
@@ -3296,13 +3326,15 @@ const WP_SHIM = (() => {
             // ホストが再生中（最近ホストの知らせが届いている）で、こちらは広告でも開いた直後でも追いつき待ちでもない
             const shouldPlay = now - lastApplyAt < 12000 && !hostPaused && !hostAd && !selfAd && !startup && targetPauseTime === null;
             if (!shouldPlay || adapter.isInAd()) { stuck.movedAt = now; return; }
-            if (now - stuck.movedAt < STUCK_MS || now - stuck.kickAt < KICK_GAP_MS) return;
+            // 飛んだ先で読み込み中の間は待つ（立て直すと読み込みが最初からになる）
+            if (settle && !settle.started && now - settle.at < SETTLE_MS) return;
+            if (now - Math.max(stuck.movedAt, rawMovedAt) < STUCK_MS || now - stuck.kickAt < KICK_GAP_MS) return;
             if (stuck.failed >= KICK_MAX_FAILED) return;
             stuck.kickAt = now;
             stuck.kicks++;
             stuck.failed++;
             post('DIAG', { event: 'stuck-kick', url: location.href, t, kicks: stuck.kicks });
-            tickSeek = null;
+            settle = null;
             withEchoGuard(() => adapter.pause());
             postStatus();
             // 少し待ってからホストの今の位置を取り直す（届いたら位置を合わせて再生する）
