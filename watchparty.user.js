@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.2
+// @version      0.24.3
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.2";
+    const __WP_VERSION__ = "0.24.3";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -659,6 +659,7 @@ const WP_SHIM = (() => {
                        color: #fff; font: 700 18px/1.5 -apple-system, system-ui, sans-serif; box-shadow: 0 6px 24px rgba(0,0,0,.6); max-width: min(92vw, 460px); }
                 .fix button { display: block; width: 100%; margin-top: 10px; border: 0; border-radius: 12px; cursor: pointer;
                               font: 700 20px/1.3 -apple-system, system-ui, sans-serif; padding: 14px 18px; color: #fff; background: #3a6df0; }
+                .fix .hint { font-size: 13px; font-weight: 600; color: #d8d8e0; margin-top: 6px; line-height: 1.5; }
                 .fix .later { background: transparent; font-size: 14px; padding: 6px; margin-top: 4px; color: #c8c8d0; }
                 .refix { border: 0; border-radius: 8px; background: rgba(58,58,70,.6); color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; cursor: pointer; }
                 .tap { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 6;
@@ -735,7 +736,7 @@ const WP_SHIM = (() => {
             <button class="tap" hidden>▶ タップして再生</button>
             <div class="clock" hidden></div>
             <div class="clock adwait" hidden>⏸ ホストが広告を見ています<small>終わると自動で再開します（止まっているのは故障ではありません）</small></div>
-            <div class="fix" hidden><div class="fmsg"></div><button class="go" type="button">🔄 再生を立て直す</button><button class="later" type="button">このまま見る</button></div>
+            <div class="fix" hidden><div class="fmsg"></div><div class="hint" hidden></div><button class="go" type="button">🔄 再生を立て直す</button><button class="later" type="button">このまま見る</button></div>
             <div class="top">
                 <button class="update" hidden></button>
             </div>
@@ -815,6 +816,7 @@ const WP_SHIM = (() => {
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
             if (playerShown && !open && !userClosed) setOpen(true);
             if (!IS_ANDROID && !IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
+            if (IS_ANDROID && playerShown && portrait) scrollVideoToTop(video);
             /*
              * 置き場所の計算し直しは、画面の大きさや映像の位置が変わったときだけ（2026-09-14）。
              * チャット欄を開いたまま毎秒計算し直すと、本物の Prime でゲストが 3〜4 秒遅れた（止めると 0.7 秒）
@@ -836,6 +838,8 @@ const WP_SHIM = (() => {
          * Android は映像や外枠に触ると再生できなくなったので、ここも触らない
          */
         const tidied = new Set();
+        const tidyKeep = new WeakSet();   // 映像の外枠に重なっていて、隠さないと決めた部品（操作ボタンの層など）
+        let tidyGoneSince = 0;
         const TIDY_LABEL = /ウォッチリスト|好きでない|好き|次のエピソード|関連|エピソード|詳細|シェア|ダウンロード|評価/;
         function hideEl(el) {
             if (tidied.has(el)) return;
@@ -845,19 +849,31 @@ const WP_SHIM = (() => {
         }
         function tidyAround(video) {
             if (!video) {
+                // 打ち始めなどで一瞬だけ映像が測れないことがある。5秒続いたら（再生画面を閉じたら）元に戻す
+                if (!tidyGoneSince) tidyGoneSince = Date.now();
+                if (Date.now() - tidyGoneSince < 5000) return;
                 for (const el of tidied) { el.style.removeProperty('visibility'); el.style.removeProperty('pointer-events'); }
                 tidied.clear();
                 return;
             }
+            tidyGoneSince = 0;
             const frame = playerFrame(video);
-            const fr = frame.getBoundingClientRect();
+            /*
+             * 外枠は上へずらしてある（translate）。ページの他の部品はずれないので、ずらす前の位置で比べる
+             * （2026-09-15 iPhone 実機: 打とうとすると外枠が見えている範囲に合わせて動き、下の「関連コンテンツ」などに重なったと
+             * みなして隠さず、スクロールすると見えてしまった）。一度隠さないと決めた部品も、あとから出てきた部品も、この基準で見る
+             */
+            const shift = Number(video.dataset.wpShift || 0);
+            const fb = frame.getBoundingClientRect();
+            const fr = { left: fb.left, right: fb.right, top: fb.top + shift, bottom: fb.bottom + shift, width: fb.width, height: fb.height };
             const cr = contentRect(video);
             const overlaps = (a, b) => a.width > 0 && a.height > 0 && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
             // 外枠からページの一番上までの、それぞれの兄弟（外枠と重ならないもの）
             for (let node = frame; node && node.parentElement && node !== document.body; node = node.parentElement) {
                 for (const sib of node.parentElement.children) {
-                    if (sib === node || sib === host || sib.contains(host) || /^(SCRIPT|STYLE|LINK)$/.test(sib.tagName)) continue;
-                    if (!overlaps(sib.getBoundingClientRect(), fr)) hideEl(sib);
+                    if (sib === node || sib === host || sib.contains(host) || /^(SCRIPT|STYLE|LINK)$/.test(sib.tagName) || tidyKeep.has(sib)) continue;
+                    if (overlaps(sib.getBoundingClientRect(), fr)) tidyKeep.add(sib);
+                    else hideEl(sib);
                 }
             }
             // 外枠の中の、映像に重ならない所のボタン（名前で見分ける）
@@ -866,6 +882,26 @@ const WP_SHIM = (() => {
                 if (!TIDY_LABEL.test(name)) continue;
                 if (!overlaps(el.getBoundingClientRect(), { left: cr.left, right: cr.left + cr.width, top: cr.top, bottom: cr.bottom })) hideEl(el);
             }
+        }
+
+        /*
+         * Android: 打とうとするとページが下へ動き、映像が上・チャット欄が下のちょうどよい位置になる（2026-09-15 ユーザー報告）。
+         * それを打たなくても自動でやる。映像やプレイヤーの外枠には触らず（触ると再生できなくなった）、ページのスクロールだけ動かす。
+         * スクロールできないページなら何もしない。打っている間と、人がスクロールした直後は動かさない
+         */
+        let lastAutoScroll = 0;
+        let userScrolledAt = 0;
+        window.addEventListener('touchmove', () => { userScrolledAt = Date.now(); }, { passive: true, capture: true });
+        function scrollVideoToTop(video) {
+            if (root.activeElement === q('input') || Date.now() - userScrolledAt < 4000 || Date.now() - lastAutoScroll < 1500) return;
+            const r = contentRect(video);
+            if (Math.abs(r.top) <= 4) return;
+            const se = document.scrollingElement || document.documentElement;
+            const want = Math.max(0, Math.round(window.scrollY + r.top));
+            if (se.scrollHeight - window.innerHeight < Math.min(want, 40)) return;   // ほとんどスクロールできない
+            lastAutoScroll = Date.now();
+            window.scrollTo(0, want);
+            setTimeout(placePanel, 300);
         }
 
         function placePanel() {
@@ -1258,6 +1294,12 @@ const WP_SHIM = (() => {
             if (fixShown) {
                 q('.fix .fmsg').textContent = trouble === 'stalled'
                     ? '⚠ 再生が止まっています' : '⚠ ホストとずれています';
+                // Prime で止まったままのとき: 同じアカウントで同じ作品を同時に見られるのは2台まで（ホストも数える）
+                const limitHint = PAGE_SERVICE === 'prime' && trouble === 'stalled';
+                q('.fix .hint').textContent = limitHint
+                    ? '同じ Amazon アカウントで同じ作品を同時に再生できるのは2台までです（ホストの端末も数えます）。ほかの端末で止めるか、別のアカウントで見てください。'
+                    : '';
+                q('.fix .hint').hidden = !limitHint;
             }
             q('.fix').hidden = !fixShown;
             // ホストの広告の間はこちらを止めて待つ。止まった理由を真ん中に出す（2026-09-14 ユーザー報告: 再生されたと思ったらすぐ止まる）
@@ -2787,7 +2829,7 @@ const WP_SHIM = (() => {
     let startup = false;         // プレイヤーが開いた直後か（STARTUP_*）
     let deferredStop = false;    // 開いた直後に「止まって待つ」を後回しにしたか
     let isHost = false;          // ui.js から教わる（このスクリプトは拡張機能の状態を直接見られない）
-    let lastTickDropReport = 0;
+    let lastTickDropReport = 0;  // 調査用（follow から抜けられない件）。記録の間引きに使う
     /*
      * 定期通知で位置を合わせた先と時刻（2026-09-14）。飛んだ先の読み込み中（まだ進んでいない）に次の通知で
      * また先へ飛ばすと、読み込みが終わらずくるくる回ったままになった（PC の Chrome、ホストが先へ飛ばしたとき）。
@@ -2804,7 +2846,13 @@ const WP_SHIM = (() => {
     const STUCK_MS = 8000;
     const KICK_GAP_MS = 20000;
     let lastApplyAt = 0;
-    let stuck = { lastT: null, movedAt: 0, kickAt: 0, kicks: 0 };  // 調査用（follow から抜けられない件）。記録の間引きに使う
+    let stuck = { lastT: null, movedAt: 0, kickAt: 0, kicks: 0, failed: 0 };
+    /*
+     * 続けて立て直せなかったら、それ以上は自動でやらない（2026-09-15 実機の記録）。
+     * 同じ Amazon アカウントで同じ作品を同時に再生できるのは2台まで。3台目（ホスト＋スマホ2台など）は読み込みのまま動かず、
+     * 自動の立て直し（止める→再生）を繰り返すと、端末どうしで再生の権利を取り合って、どれも落ち着かなかった
+     */
+    const KICK_MAX_FAILED = 2;
 
     function post(type, payload) {
         window.postMessage({ source: WP.SRC_BRIDGE, type, payload }, location.origin);
@@ -3229,7 +3277,7 @@ const WP_SHIM = (() => {
                     } catch { /* 無視 */ }
                     return 0;
                 })(),
-                startup, follow: targetPauseTime !== null, kicks: stuck.kicks
+                startup, follow: targetPauseTime !== null, kicks: stuck.kicks, gaveUp: stuck.failed >= KICK_MAX_FAILED
             } : null
         });
     }
@@ -3240,6 +3288,8 @@ const WP_SHIM = (() => {
             const now = Date.now();
             const t = adapter.getCurrentTime();
             if (stuck.lastT === null || Math.abs(t - stuck.lastT) > 0.2) {
+                // 立て直しのあと 10 秒以上ちゃんと進んだら、失敗の数を戻す
+                if (stuck.failed && now - stuck.kickAt > 10000 && !adapter.isPaused()) stuck.failed = 0;
                 stuck.lastT = t;
                 stuck.movedAt = now;
             }
@@ -3247,8 +3297,10 @@ const WP_SHIM = (() => {
             const shouldPlay = now - lastApplyAt < 12000 && !hostPaused && !hostAd && !selfAd && !startup && targetPauseTime === null;
             if (!shouldPlay || adapter.isInAd()) { stuck.movedAt = now; return; }
             if (now - stuck.movedAt < STUCK_MS || now - stuck.kickAt < KICK_GAP_MS) return;
+            if (stuck.failed >= KICK_MAX_FAILED) return;
             stuck.kickAt = now;
             stuck.kicks++;
+            stuck.failed++;
             post('DIAG', { event: 'stuck-kick', url: location.href, t, kicks: stuck.kicks });
             tickSeek = null;
             withEchoGuard(() => adapter.pause());
