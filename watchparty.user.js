@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.5
+// @version      0.24.6
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.5";
+    const __WP_VERSION__ = "0.24.6";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -838,7 +838,6 @@ const WP_SHIM = (() => {
          * Android は映像や外枠に触ると再生できなくなったので、ここも触らない
          */
         const tidied = new Set();
-        const tidyKeep = new WeakSet();   // 映像の外枠に重なっていて、隠さないと決めた部品（操作ボタンの層など）
         let tidyGoneSince = 0;
         const TIDY_LABEL = /ウォッチリスト|好きでない|好き|次のエピソード|関連|エピソード|詳細|シェア|ダウンロード|評価/;
         function hideEl(el) {
@@ -847,6 +846,25 @@ const WP_SHIM = (() => {
             el.style.setProperty('pointer-events', 'none', 'important');
             tidied.add(el);
         }
+        /*
+         * iPhone の再生画面では、ページそのものをスクロールさせない（2026-09-16 実機: 打とうとすると下へスクロールでき、
+         * プレイヤーの下のページが見えて押せた）。再生画面でなくなったら戻す
+         */
+        let scrollLocked = false;
+        function lockScroll(on) {
+            if (on === scrollLocked) return;
+            scrollLocked = on;
+            for (const el of [document.documentElement, document.body]) {
+                if (!el) continue;
+                if (on) {
+                    el.style.setProperty('overflow', 'hidden', 'important');
+                    el.style.setProperty('overscroll-behavior', 'none', 'important');
+                } else {
+                    el.style.removeProperty('overflow');
+                    el.style.removeProperty('overscroll-behavior');
+                }
+            }
+        }
         function tidyAround(video) {
             if (!video) {
                 // 打ち始めなどで一瞬だけ映像が測れないことがある。5秒続いたら（再生画面を閉じたら）元に戻す
@@ -854,9 +872,11 @@ const WP_SHIM = (() => {
                 if (Date.now() - tidyGoneSince < 5000) return;
                 for (const el of tidied) { el.style.removeProperty('visibility'); el.style.removeProperty('pointer-events'); }
                 tidied.clear();
+                lockScroll(false);
                 return;
             }
             tidyGoneSince = 0;
+            lockScroll(true);
             const frame = playerFrame(video);
             /*
              * 外枠は上へずらしてある（translate）。ページの他の部品はずれないので、ずらす前の位置で比べる
@@ -868,12 +888,18 @@ const WP_SHIM = (() => {
             const fr = { left: fb.left, right: fb.right, top: fb.top + shift, bottom: fb.bottom + shift, width: fb.width, height: fb.height };
             const cr = contentRect(video);
             const overlaps = (a, b) => a.width > 0 && a.height > 0 && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-            // 外枠からページの一番上までの、それぞれの兄弟（外枠と重ならないもの）
+            /*
+             * 外枠からページの一番上までの、それぞれの兄弟を隠す。残すのは、外枠に重なっていて外枠と同じくらいの大きさの層
+             * （映像に重なる操作ボタンの層など）だけ。
+             * 2026-09-16 iPhone 実機: 重なっているものは全部残していたが、プレイヤーの下に敷かれたページ全体（下の方に関連作品）も
+             * 外枠に重なっていて残り、打とうとしてスクロールすると見えた。外枠より大きく広がるものは隠す
+             */
             for (let node = frame; node && node.parentElement && node !== document.body; node = node.parentElement) {
                 for (const sib of node.parentElement.children) {
-                    if (sib === node || sib === host || sib.contains(host) || /^(SCRIPT|STYLE|LINK)$/.test(sib.tagName) || tidyKeep.has(sib)) continue;
-                    if (overlaps(sib.getBoundingClientRect(), fr)) tidyKeep.add(sib);
-                    else hideEl(sib);
+                    if (sib === node || sib === host || sib.contains(host) || /^(SCRIPT|STYLE|LINK)$/.test(sib.tagName)) continue;
+                    const r = sib.getBoundingClientRect();
+                    const layer = overlaps(r, fr) && r.height <= fr.height * 1.25 + 8 && r.width <= fr.width * 1.25 + 8;
+                    if (!layer) hideEl(sib);
                 }
             }
             // 外枠の中の、映像に重ならない所のボタン（名前で見分ける）
