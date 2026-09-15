@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.4
+// @version      0.24.5
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.4";
+    const __WP_VERSION__ = "0.24.5";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -2852,10 +2852,28 @@ const WP_SHIM = (() => {
     let rawLast = null;         // 生の再生位置の見張り（本編の時間の換算に左右されない）
     let rawMovedAt = 0;
 
+    /**
+     * 飛んだ先で読み込み中か。20 秒たっても、まだ読み込み中（seeking・データが足りない）なら最長 60 秒まで待つ
+     * （途中で飛び直すと、読み込みが最初からになる）
+     */
+    function settlePending(now) {
+        if (!settle || settle.started) return false;
+        if (now - settle.at < SETTLE_MS) return true;
+        const v = adapter._video;
+        return Boolean(v) && !mediaLoaded(v) && now - settle.at < 60000;
+    }
+
+    /** 読み込みが済んでいるか（シーク中でなく、データがある）。中身を持たない <video>（テストの偽物）は済んでいる扱い */
+    function mediaLoaded(v) {
+        if (!v) return true;
+        const hasMedia = Boolean(v.currentSrc || v.srcObject);
+        return !v.seeking && (v.readyState >= 3 || !hasMedia);
+    }
+
     /** ホストの位置（本編の時間）へ追いつく。ホストが再生中のときだけ使う */
     function catchUp(target, threshold) {
         const now = Date.now();
-        if (settle && !settle.started && now - settle.at < SETTLE_MS) {
+        if (settlePending(now)) {
             // 飛んだ先で読み込み中。飛び直さず、再生の指示だけ出して待つ
             if (adapter.isPaused()) adapter.play();
             return;
@@ -3012,7 +3030,8 @@ const WP_SHIM = (() => {
                 // サービスによってはシーク後に勝手に再生を再開する（Prime がそう）。止まっていたなら止め直す
                 const wasPaused = adapter.isPaused();
                 adapter.seek(currentTime);
-                settle = { at: Date.now(), started: false, lead: 0 };
+                // ホストが再生中のときだけ、読み込みを待つ（止まっているホストに合わせるときは追いかけにならない）
+                if (!hostPaused) settle = { at: Date.now(), started: false, lead: 0 };
                 if (wasPaused) adapter.pause();
             });
         } else if (type === 'tick') {
@@ -3307,16 +3326,22 @@ const WP_SHIM = (() => {
             const t = adapter.getCurrentTime();
             const v = adapter._video;
             const raw = v ? v.currentTime : t;
-            if (rawLast === null || Math.abs(raw - rawLast) > 0.2) {
-                if (rawLast !== null && !adapter.isPaused() && settle && !settle.started) {
-                    settle.started = true;
-                    // 飛んでから動き出すまでの時間 → 次に先へ飛ぶ量（1〜10秒。少しずつ覚え直す）
-                    const took = (now - settle.at) / 1000;
-                    loadLeadSec = Math.max(1, Math.min(10, loadLeadSec * 0.5 + (took + 0.5) * 0.5));
-                }
-                rawLast = raw;
-                rawMovedAt = now;
+            /*
+             * 動き出したか。飛んだこと自体でも位置は変わるので、それは数えない（2026-09-15 実機の記録: 飛んだ直後に
+             * 「動き出した」とみなして待つのをやめ、読み込み中に5秒ごとに飛び直していた）。
+             * 読み込み中でなく（seeking でない・データがある）、前回から普通の速さ（1秒に 0.3〜2 秒）で進んだときだけ
+             */
+            const step = rawLast === null ? 0 : raw - rawLast;
+            const loaded = mediaLoaded(v);
+            const advancing = rawLast !== null && loaded && !adapter.isPaused() && step > 0.3 && step < 2;
+            if (advancing && settle && !settle.started) {
+                settle.started = true;
+                // 飛んでから動き出すまでの時間 → 次に先へ飛ぶ量（1〜10秒。少しずつ覚え直す）
+                const took = (now - settle.at) / 1000;
+                loadLeadSec = Math.max(1, Math.min(10, loadLeadSec * 0.5 + (took + 0.5) * 0.5));
             }
+            if (advancing) rawMovedAt = now;
+            rawLast = raw;
             if (stuck.lastT === null || Math.abs(t - stuck.lastT) > 0.2) {
                 // 立て直しのあと 10 秒以上ちゃんと進んだら、失敗の数を戻す
                 if (stuck.failed && now - stuck.kickAt > 10000 && !adapter.isPaused()) stuck.failed = 0;
@@ -3327,7 +3352,7 @@ const WP_SHIM = (() => {
             const shouldPlay = now - lastApplyAt < 12000 && !hostPaused && !hostAd && !selfAd && !startup && targetPauseTime === null;
             if (!shouldPlay || adapter.isInAd()) { stuck.movedAt = now; return; }
             // 飛んだ先で読み込み中の間は待つ（立て直すと読み込みが最初からになる）
-            if (settle && !settle.started && now - settle.at < SETTLE_MS) return;
+            if (settlePending(now)) return;
             if (now - Math.max(stuck.movedAt, rawMovedAt) < STUCK_MS || now - stuck.kickAt < KICK_GAP_MS) return;
             if (stuck.failed >= KICK_MAX_FAILED) return;
             stuck.kickAt = now;
