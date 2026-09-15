@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.0
+// @version      0.24.1
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.0";
+    const __WP_VERSION__ = "0.24.1";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -2253,8 +2253,27 @@ const WP_SHIM = (() => {
             return this._video ? this._video.currentTime : 0;
         }
 
+        /**
+         * プレイヤーが持っている本編だけの位置（秒）。無ければ null。
+         * 本物の Netflix（広告つきプラン）で確認（2026-09-15）: 冒頭の広告 31 秒が流れたあと、
+         * getCurrentTime は 56 秒、getSegmentTime は 25 秒だった。広告の無い人では両方同じ。
+         */
+        _segmentTime() {
+            try {
+                const ms = this._player?.getSegmentTime?.();
+                if (!Number.isFinite(ms) || ms < 0) return null;
+                const sec = ms / 1000;
+                // 生の位置（広告込み）より先になることはない。おかしな値は使わない
+                return sec <= this._rawTime() + 1 ? sec : null;
+            } catch { return null; }
+        }
+
         /** 外に見せるのは「広告を除いた本編の時間」 */
         getCurrentTime() {
+            // 広告中は本編が進んでいない。その広告枠の位置で止まって見える
+            if (this._adOpen && Number.isFinite(this._adOpen.contentMs)) return this._adOpen.contentMs / 1000;
+            const seg = this._segmentTime();
+            if (seg !== null) return seg;
             return this._toContent(this._rawTime());
         }
 
@@ -2305,14 +2324,22 @@ const WP_SHIM = (() => {
             // 広告中はプレイヤーがシークを受け付けない（canSeek() が false）
             if (this.isInAd()) return;
 
-            let raw = this._toRaw(Math.max(0, seconds));
+            /*
+             * 本編だけの位置が読めるなら、「いまの生の位置 ＋ 本編での差」へ動かす。
+             * 間の広告の長さが分からなくても、動いた先で読み直した差を次の合わせで詰めるので、2回目で合う
+             * （広告枠の長さの一覧は、自動操作では 0 のままで当てにならなかった）
+             */
+            const seg = this._segmentTime();
+            let raw = seg !== null
+                ? Math.max(0, this._rawTime() + (Math.max(0, seconds) - seg))
+                : this._toRaw(Math.max(0, seconds));
             const duration = this.getDuration();   // 生の長さ（広告込み）
             if (Number.isFinite(duration) && duration > 0) raw = Math.min(raw, duration);
 
             // 自分で動かした分は「人が飛ばした」と数えない。動かす前に印をつける
             // （プレイヤーによっては seek() の中で同期的に seeked が飛んでくる）
             this._lastSeekAt = Date.now();
-            this._lastTime = this._toContent(raw);
+            this._lastTime = Math.max(0, seconds);
             this._lastWallMs = this._lastSeekAt;
             // プレイヤーはミリ秒で受け取る
             this._player.seek?.(Math.round(raw * 1000));
