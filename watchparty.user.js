@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.21
+// @version      0.24.22
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.21";
+    const __WP_VERSION__ = "0.24.22";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -812,9 +812,12 @@ const WP_SHIM = (() => {
             const input = q('input');
             for (const type of ['focus', 'blur']) {
                 input.addEventListener(type, () => {
-                    // キーボードがせり上がる／下りる間、画面の更新に合わせて置き直す（ちらつきを減らす）
+                    /*
+                     * キーボードがせり上がる／下りる間、画面の更新に合わせて置き直す（ちらつきを減らす）。
+                     * 保険の置き直しは**チャット欄だけ**にする（映像に触るのは、動き終わったあとの1回だけ。followKeyboard がやる）
+                     */
                     followKeyboard();
-                    for (const ms of [60, 400, 900]) setTimeout(() => { placePanel(); keepLatest(); }, ms);
+                    for (const ms of [400, 900]) setTimeout(() => { placePanel(true); keepLatest(); }, ms);
                 });
             }
         }
@@ -874,8 +877,12 @@ const WP_SHIM = (() => {
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
-            // プレイヤーの箱を映像の大きさに縮めて、画面の一番上へ（操作ボタンと字幕を映像の中に収める）
-            if (video) fitPlayerToVideo(video, playerShown && portrait, visibleTop());
+            /*
+             * プレイヤーの箱を映像の大きさに縮めて、画面の一番上へ（操作ボタンと字幕を映像の中に収める）。
+             * キーボードが動いている間（following）は触らない。動いている最中に映像を書き換えると、
+             * プレイヤーが描き直し・読み込み直しをして再生が乱れる（2026-09-16 ユーザー指摘）
+             */
+            if (video && !following) fitPlayerToVideo(video, playerShown && portrait, visibleTop());
             // 一度でも再生が始まったか（ゲストに要らないボタンを隠すのは、始まってから）
             if (playerShown && video.currentTime > 0.5 && !video.paused) startedOnce = true;
             hideGuestControls(playerShown ? video : null);
@@ -1112,7 +1119,14 @@ const WP_SHIM = (() => {
             setTimeout(placePanel, 300);
         }
 
-        function placePanel() {
+        /**
+         * チャット欄（と、必要ならプレイヤー）の置き場所を決める。
+         * @param {boolean} panelOnly 映像には触らず、こちらのチャット欄だけ置き直す。
+         *   キーボードが動いている間に使う（2026-09-16）。映像の見た目を毎フレーム書き換えると、
+         *   プレイヤーが描き直し・読み込み直しをして再生が乱れる（毎秒の書き換えでゲストが3〜4秒遅れた実測がある）。
+         *   チャット欄だけなら軽いので、頻繁に打っても問題ない
+         */
+        function placePanel(panelOnly = false) {
             if (!open) return;
             const panel = q('.panel');
             /*
@@ -1133,7 +1147,7 @@ const WP_SHIM = (() => {
              * 動かしていた頃は、映像の置き場所まで一緒に動いて崩れていた
              */
             const composing = !IS_DESKTOP && root.activeElement === q('input');
-            if (video) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop());
+            if (video && !panelOnly) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop());
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
@@ -1300,20 +1314,34 @@ const WP_SHIM = (() => {
         let followUntil = 0;
         let following = false;
         let lastShift = -1;
+        let steadySince = 0;
         function followKeyboard() {
-            followUntil = Date.now() + 800;
+            followUntil = Date.now() + 1200;
             if (following) return;
             following = true;
+            lastShift = keyboardShift();
+            steadySince = 0;
             const step = () => {
                 const shift = keyboardShift();
-                if (shift !== lastShift) { lastShift = shift; placePanel(); }
+                if (shift !== lastShift) {
+                    lastShift = shift;
+                    steadySince = 0;
+                    placePanel(true);          // 動いている間は**チャット欄だけ**（映像には触らない）
+                } else if (!steadySince) {
+                    steadySince = Date.now();
+                } else if (Date.now() - steadySince > 250) {
+                    // 動き終わったので、ここで1回だけ映像も合わせ直して終わり
+                    placePanel();
+                    following = false;
+                    return;
+                }
                 if (Date.now() < followUntil) requestAnimationFrame(step);
-                else following = false;
+                else { placePanel(); following = false; }
             };
             requestAnimationFrame(step);
         }
-        globalThis.visualViewport?.addEventListener('resize', () => { placePanel(); followKeyboard(); });
-        globalThis.visualViewport?.addEventListener('scroll', () => { placePanel(); followKeyboard(); });
+        globalThis.visualViewport?.addEventListener('resize', followKeyboard);
+        globalThis.visualViewport?.addEventListener('scroll', followKeyboard);
         window.addEventListener('resize', placePanel);
         window.addEventListener('orientationchange', () => setTimeout(placePanel, 300));
         // プレイヤーの大きさはページの作りで後から変わるので、開いている間はときどき測り直す
