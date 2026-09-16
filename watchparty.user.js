@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.10
+// @version      0.24.11
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.10";
+    const __WP_VERSION__ = "0.24.11";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -700,6 +700,13 @@ const WP_SHIM = (() => {
                 .pop { border: 0; border-radius: 8px; background: rgba(58,58,70,.6); color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; cursor: pointer; }
                 .panel[data-place="side"] input { background: rgba(20,20,26,.55); border-color: rgba(255,255,255,.2); }
                 .panel[data-place="side"] .close { background: rgba(58,58,70,.6); }
+                /*
+                 * 映像を触っている間だけ、チャット欄を薄くして触れないようにする（2026-09-16 ユーザー報告）。
+                 * スマホの縦持ちでは、プレイヤーの操作バー（字幕・全画面）が映像の下のほうに出るため、
+                 * チャット欄の裏に入って押せなかった（横にすると置き方が変わるので出てきた）。
+                 * 映像をタップしたら数秒どく。チャット欄を触ればすぐ戻る
+                 */
+                .panel[data-away="1"] { opacity: .12; pointer-events: none; transition: opacity .15s; }
                 /* iPhone で打っている間の狭いチャット欄: 入力欄と直近の発言だけ */
                 .panel[data-tight="1"] .phead, .panel[data-tight="1"] .notice { display: none; }
                 .panel[data-tight="1"] { gap: 4px; padding: 6px; }
@@ -1190,6 +1197,57 @@ const WP_SHIM = (() => {
                 renderBadge();
             }
         }
+        /*
+         * チャット欄の上にマウスがある間も、プレイヤーに「マウスが動いている」と伝える（2026-09-16 ユーザー報告）。
+         * Prime / Netflix は、しばらくマウスが動かないと操作バー（字幕・全画面など）を隠す。
+         * 右上のボタンへ動かす途中でチャット欄の上に入ると動きが届かず、押す直前に消えて押せなかった。
+         * 知らせるのは「動いた」ことだけ（押す操作は送らない）。触る画面（スマホ）では要らない
+         */
+        if (IS_DESKTOP) {
+            let lastMove = 0;
+            const keepControlsAlive = () => {
+                const now = Date.now();
+                if (now - lastMove < 300) return;
+                lastMove = now;
+                const v = mainVideo() || layoutVideo();
+                const r = v && v.getBoundingClientRect();
+                if (!r || r.width < 50 || r.height < 50) return;
+                const x = Math.round(r.left + r.width / 2);
+                const y = Math.round(r.top + r.height / 2);
+                for (const type of ['mousemove', 'pointermove']) {
+                    v.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, clientX: x, clientY: y }));
+                }
+            };
+            for (const type of ['mousemove', 'pointermove']) {
+                root.addEventListener(type, keepControlsAlive, { passive: true });
+            }
+        }
+
+        /*
+         * 映像を触ったら、チャット欄を数秒どかす（スマホの縦持ちで、プレイヤーの操作バーがチャット欄の裏に入るため。2026-09-16）。
+         * プレイヤーの操作バーは数秒で自分で消えるので、こちらも同じくらいで戻す。チャット欄を触ればすぐ戻る
+         */
+        const AWAY_MS = 5000;
+        let awayTimer = null;
+        function stepAside() {
+            if (IS_DESKTOP || !open) return;
+            const panel = q('.panel');
+            panel.dataset.away = '1';
+            clearTimeout(awayTimer);
+            awayTimer = setTimeout(() => { panel.dataset.away = ''; }, AWAY_MS);
+        }
+        function comeBack() {
+            clearTimeout(awayTimer);
+            q('.panel').dataset.away = '';
+        }
+        for (const type of ['pointerdown', 'touchstart']) {
+            // ページ側（映像・プレイヤーの操作バー）を触ったときだけ。こちらの画面を触ったときは戻す
+            window.addEventListener(type, (ev) => {
+                const path = typeof ev.composedPath === 'function' ? ev.composedPath() : [];
+                if (path.includes(host)) comeBack(); else stepAside();
+            }, { capture: true, passive: true });
+        }
+
         q('.fab').addEventListener('click', () => setOpen(true));
         q('.close').addEventListener('click', () => { userClosed = true; setOpen(false); });
         q('.refix').addEventListener('click', fixPlayback);
@@ -1417,10 +1475,19 @@ const WP_SHIM = (() => {
          * チャット欄は映像の下に置く（placePanel）。キーボードが出ると画面が上に動き、打つときも視聴を妨げない（ユーザー確認）
          */
         if (portrait && !IS_ANDROID) {
+            /*
+             * まず、箱の中の映像そのものを上端へ寄せる（2026-09-16 ユーザー選択）。
+             * 以前は枠ごと上へずらしていたが、**枠の上端にある字幕・全画面のボタンが画面の外へ出て押せなくなった**
+             * （横持ちではずらさないので出てきた、という実機の報告で判明）。
+             * 枠を動かさずに中身だけ寄せれば、ボタンは画面の中に残る。
+             */
+            video.style.setProperty('object-position', 'center top', 'important');
             const r = contentRect(video);
             const originalTop = r.top + applied;          // ずらす前の、映像の上端
             const d = Math.round(originalTop - visibleTop);
             if (Math.abs(d) > 2) want = d;
+        } else if (!IS_ANDROID) {
+            video.style.removeProperty('object-position');
         }
         if (want === applied) return;
         /*
