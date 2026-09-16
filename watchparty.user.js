@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.15
+// @version      0.24.16
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.15";
+    const __WP_VERSION__ = "0.24.16";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -827,27 +827,14 @@ const WP_SHIM = (() => {
          * キーボードが出ると見えている高さ（visualViewport）が縮むので、そのたびに置き直す。
          */
         const MIN_PANEL_PX = 170;
+        // 画面の一番上にあるプレイヤーの操作ボタン（字幕・全画面・戻る）のぶん。ここにはチャット欄を置かない
+        const TOP_BAR_PX = 56;
         /** 見えている範囲の上端（visualViewport のずれ＋上の安全領域） */
         function visibleTop() {
             const vv = globalThis.visualViewport;
             return (vv ? vv.offsetTop : 0) + (q('.safe') ? q('.safe').getBoundingClientRect().height : 0);
         }
 
-        /*
-         * 映像の上端をどこに合わせるか。ふつうは見えている範囲の上端。
-         * iPhone で打っている間は、チャット欄（キーボードのすぐ上に出ている）の上に映像の下端が来る所にする
-         * （2026-09-16 iPhone 実機: 打とうとすると映像が下へ押しやられ、チャット欄とアドレスバーの後ろに隠れて上は真っ黒になった。
-         * キーボードが出ると Safari は見えている範囲をずらし、その量と要素の位置の測り方が合わない。
-         * 実際に見えているチャット欄の位置は同じ測り方なので、それを基準にすればずれない）
-         */
-        function videoTopTarget(video) {
-            const panel = q('.panel');
-            if (!IS_ANDROID && !IS_DESKTOP && open && root.activeElement === q('input') && panel.dataset.place === 'overlay') {
-                const pr = panel.getBoundingClientRect();
-                if (pr.height > 0) return pr.top - 4 - contentRect(video).height;
-            }
-            return visibleTop();
-        }
 
         /*
          * 2026-09-14 ユーザー要望: チャットを見ながら観る前提なので、縦持ちの映像はチャット欄の開け閉めに関係なく
@@ -859,7 +846,7 @@ const WP_SHIM = (() => {
         function layoutTick() {
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) shiftUp(video, portrait, videoTopTarget(video));
+            if (video) resetVideoShift(video);
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
             if (playerShown && !open && !userClosed) setOpen(true);
             if (!IS_ANDROID && !IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
@@ -999,7 +986,7 @@ const WP_SHIM = (() => {
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) shiftUp(video, portrait, videoTopTarget(video));
+            if (video) resetVideoShift(video);
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
@@ -1019,6 +1006,24 @@ const WP_SHIM = (() => {
                 panel.style.left = 'auto';
                 panel.style.width = '360px';
                 panel.dataset.place = 'side';
+            } else if (!IS_ANDROID && !IS_DESKTOP && portrait && !composing && r && r.height > 0 &&
+                       Math.round(r.top - viewTop) - TOP_BAR_PX - 8 >= MIN_PANEL_PX) {
+                /*
+                 * iPhone の縦持ち: 映像は動かさず（箱の真ん中のまま）、**上の余白をチャット欄にする**（2026-09-16 ユーザー案）。
+                 * 映像を上へ寄せると、プレイヤーの操作ボタンや字幕が画面の外・チャット欄の裏へ行ってしまうため。
+                 * 下の余白には Amazon の字幕がそのまま出るので読める。打つ間だけキーボードの上へ移る（下の overlay）。
+                 *
+                 * 画面の一番上（TOP_BAR_PX）は空ける。そこにプレイヤーの字幕・全画面・戻るのボタンが出るので、
+                 * こちらの見出しの 🔄 や ✕ と重ならないようにする（2026-09-16 ユーザー指摘）
+                 */
+                const top = viewTop + TOP_BAR_PX;
+                const above = Math.round(r.top - top) - 8;
+                panel.style.top = `${top}px`;
+                panel.style.bottom = 'auto';
+                panel.style.height = `${above}px`;
+                panel.dataset.place = 'above-video';
+                panel.dataset.tight = '';
+                panel.style.left = ''; panel.style.width = '';
             } else if (r && r.height > 0 && room >= MIN_PANEL_PX && !composing) {
                 panel.style.top = `${viewTop + below + 8}px`;
                 panel.style.bottom = 'auto';
@@ -1041,8 +1046,6 @@ const WP_SHIM = (() => {
                 panel.dataset.tight = composing && h < 140 ? '1' : '';
                 panel.dataset.place = 'overlay';
                 panel.style.left = ''; panel.style.width = '';
-                // 打っている間は、置いたチャット欄の位置に合わせて映像を置き直す（videoTopTarget）
-                if (composing && video) shiftUp(video, portrait, videoTopTarget(video));
             }
             keepLatest();
             reportLayout(video, r, panel);
@@ -1441,41 +1444,20 @@ const WP_SHIM = (() => {
      * （iPhone の時刻の帯＝安全領域、見えている範囲のずれ visualViewport.offsetTop）。見えている上端に合わせる。
      * 上にはみ出している映像は下へずらす（want が負）。
      */
-    function shiftUp(video, portrait, visibleTop = 0) {
-        const applied = Number(video.dataset.wpShift || 0);
-        let want = 0;
+    function resetVideoShift(video) {
         /*
-         * Android では映像を一切ずらさない（2026-09-14 実機で3回確かめた）: 読み込み中からずらす（v0.20.4）も、本編が3秒以上
-         * 進んでからずらす（v0.21.0）も「ビデオを視聴できません」になった。ずらさない v0.20.3 / v0.20.5 は再生できた。
-         * チャット欄は映像の下に置く（placePanel）。キーボードが出ると画面が上に動き、打つときも視聴を妨げない（ユーザー確認）
+         * 2026-09-16 ユーザー案: **映像は動かさない**（箱の真ん中のまま）。上へ寄せると、プレイヤーの操作ボタン
+         * （字幕・全画面）や字幕が画面の外・チャット欄の裏へ行ってしまった。
+         * 代わりに、映像の上の余白へチャット欄を置く（placePanel の 'above-video'）。
+         * ここでは、前の版で付けた寄せ方（translate / object-position）を元に戻すだけ
          */
-        if (portrait && !IS_ANDROID) {
-            /*
-             * まず、箱の中の映像そのものを上端へ寄せる（2026-09-16 ユーザー選択）。
-             * 以前は枠ごと上へずらしていたが、**枠の上端にある字幕・全画面のボタンが画面の外へ出て押せなくなった**
-             * （横持ちではずらさないので出てきた、という実機の報告で判明）。
-             * 枠を動かさずに中身だけ寄せれば、ボタンは画面の中に残る。
-             */
-            video.style.setProperty('object-position', 'center top', 'important');
-            const r = contentRect(video);
-            const originalTop = r.top + applied;          // ずらす前の、映像の上端
-            const d = Math.round(originalTop - visibleTop);
-            if (Math.abs(d) > 2) want = d;
-        } else if (!IS_ANDROID) {
-            video.style.removeProperty('object-position');
+        if (!IS_ANDROID) video.style.removeProperty('object-position');
+        if (Number(video.dataset.wpShift || 0)) {
+            playerFrame(video).style.removeProperty('translate');
+            delete video.dataset.wpShift;
         }
-        if (want === applied) return;
-        /*
-         * 映像だけでなく、映像と操作ボタン（巻き戻し・再生・時間表示）をまとめて包むプレイヤーの外枠ごとずらす（2026-09-14 ユーザー要望 A）。
-         * 映像だけずらすと、操作ボタンが元の真ん中に残って浮いた。
-         * transform ではなく translate を使う。Netflix は映像を真ん中に置くのに自分で transform を付けていて、
-         * それを上書きすると映像が画面の上にはみ出した（2026-09-14 本物の Netflix で確認）。translate なら重ねがけになる
-         */
-        const target = playerFrame(video);
-        if (want) target.style.setProperty('translate', `0 ${-want}px`, 'important');
-        else target.style.removeProperty('translate');
-        video.dataset.wpShift = String(want);
     }
+
 
     /**
      * 映像と同じ大きさで映像を包んでいる、いちばん外側の要素（プレイヤーの外枠）。操作ボタンの層もこの中にある。
