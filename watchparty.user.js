@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.17
+// @version      0.24.18
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.17";
+    const __WP_VERSION__ = "0.24.18";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -710,6 +710,10 @@ const WP_SHIM = (() => {
                         font-size: 14px; line-height: 1.5; overscroll-behavior: contain; }
                 /* 新しい発言を一番下に出す。少ないうちも下から積み上げる（LINE と同じ） */
                 .msgs > :first-child { margin-top: auto; }
+                /* スマホ（上が最新）: 入力欄を上に、発言は上から下へ新しい順に並べる（2026-09-16 ユーザー要望） */
+                .panel[data-newest="top"] form { order: -1; }
+                .panel[data-newest="top"] .notice { order: -2; }
+                .panel[data-newest="top"] .msgs > :first-child { margin-top: 0; }
                 .msg { word-break: break-word; flex: none; }
                 .msg .name { font-weight: 700; margin-right: 6px; }
                 .msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
@@ -779,11 +783,20 @@ const WP_SHIM = (() => {
          * （2026-09-16 Android 実機: 送ってキーボードが閉じると欄の大きさが変わり、上の古い発言に戻って最新が見えなくなった）。
          * 一番下にいるかは、人が指やホイールで動かしたときだけ覚え直す（大きさが変わって勝手に動いたときは覚え直さない）
          */
+        /*
+         * スマホは**上が最新**にする（2026-09-16 ユーザー要望）。入力欄も上に置く。
+         * こうすると、打つときにキーボードが下を隠しても、最新の発言と入力欄が見えたままになり、
+         * チャット欄そのものを動かす必要がなくなる（動かすと映像の置き場所まで動いて崩れていた）
+         */
+        const NEWEST_TOP = !IS_DESKTOP;
+        if (NEWEST_TOP) q('.panel').dataset.newest = 'top';
         let stickLatest = true;
         let msgsTouchedAt = 0;
         function keepLatest() {
             const box = q('.msgs');
-            if (stickLatest && box) box.scrollTop = box.scrollHeight;
+            if (!stickLatest || !box) return;
+            // スマホは上が最新（上へ）、PC は下が最新（下へ）
+            box.scrollTop = NEWEST_TOP ? 0 : box.scrollHeight;
         }
         {
             const box = q('.msgs');
@@ -792,7 +805,7 @@ const WP_SHIM = (() => {
             }
             box.addEventListener('scroll', () => {
                 if (Date.now() - msgsTouchedAt > 1500) return;
-                stickLatest = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+                stickLatest = NEWEST_TOP ? box.scrollTop < 40 : box.scrollHeight - box.scrollTop - box.clientHeight < 40;
             }, { passive: true });
             if (globalThis.ResizeObserver) new ResizeObserver(() => keepLatest()).observe(box);
             // 打ち始め・打ち終わり（キーボードの出し入れ）でも置き直して、最新を見せる
@@ -848,12 +861,18 @@ const WP_SHIM = (() => {
             const portrait = window.innerHeight > window.innerWidth;
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
             // プレイヤーの箱を映像の大きさに縮めて、画面の一番上へ（操作ボタンと字幕を映像の中に収める）
-            if (video) fitPlayerToVideo(video, playerShown && portrait, visibleTop());
+            const typing = root.activeElement === q('input');
+            if (video) fitPlayerToVideo(video, playerShown && portrait, visibleTop(), typing);
             // 一度でも再生が始まったか（ゲストに要らないボタンを隠すのは、始まってから）
             if (playerShown && video.currentTime > 0.5 && !video.paused) startedOnce = true;
             hideGuestControls(playerShown ? video : null);
+            sizeCaptions(playerShown && portrait ? video : null);
             if (playerShown && !open && !userClosed) setOpen(true);
-            if (!IS_ANDROID && !IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
+            /*
+             * 2026-09-16 実機（Android）: プレイヤーの箱を縮めたことで、その下のページ（「続きを観る」など）が見えて押せてしまった。
+             * これまで Android では触らない方針だったが、箱を縮める今の作りでは隠す必要があるので、Android でも隠す
+             */
+            if (!IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
             if (IS_ANDROID && playerShown && portrait) scrollVideoToTop(video);
             /*
              * 置き場所の計算し直しは、画面の大きさや映像の位置が変わったときだけ（2026-09-14）。
@@ -937,6 +956,34 @@ const WP_SHIM = (() => {
                 el.style.setProperty('visibility', 'hidden', 'important');
                 el.style.setProperty('pointer-events', 'none', 'important');
                 guestHidden.add(el);
+            }
+        }
+
+        /*
+         * 字幕の**文字の大きさだけ**を映像の幅に合わせる（2026-09-16 実機: Android は大きすぎ、iPhone は小さすぎた）。
+         * 位置は動かさない（動かすと Amazon の描き直しとぶつかって、字幕がすぐ消えた）
+         */
+        const CAPTION_SEL = '[class*="caption" i], [class*="subtitle" i], [class*="timedtext" i], [id*="caption" i], [id*="subtitle" i]';
+        const captionSized = new Set();
+        function sizeCaptions(video) {
+            if (IS_DESKTOP) return;
+            if (!video) {
+                for (const el of captionSized) { el.style.removeProperty('font-size'); delete el.dataset.wpCapFont; }
+                captionSized.clear();
+                return;
+            }
+            const cr = contentRect(video);
+            if (!(cr.width > 0)) return;
+            const font = Math.max(13, Math.min(20, Math.round(cr.width * 0.045)));
+            for (const el of playerFrame(video).querySelectorAll(CAPTION_SEL)) {
+                if (el.closest('button, a, [role="button"], [class*="button" i]')) continue;   // 字幕のボタンには触らない
+                if (!(el.textContent || '').trim()) continue;
+                const r = el.getBoundingClientRect();
+                if (!(r.width >= cr.width * 0.4)) continue;
+                if (el.dataset.wpCapFont === String(font)) continue;
+                el.style.setProperty('font-size', `${font}px`, 'important');
+                el.dataset.wpCapFont = String(font);
+                captionSized.add(el);
             }
         }
 
@@ -1026,15 +1073,16 @@ const WP_SHIM = (() => {
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop());
+            /*
+             * 2026-09-16 ユーザー要望: スマホは上が最新・入力欄も上にしたので、**打っている間もチャット欄と映像を動かさない**。
+             * キーボードで下が隠れても、入力欄と最新の発言は見えたままになる。
+             * 動かしていた頃は、映像の置き場所まで一緒に動いて崩れていた
+             */
+            const composing = !IS_DESKTOP && root.activeElement === q('input');
+            if (video) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop(), composing);
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
-            /*
-             * iPhone で打っている間（キーボードが出ている）は、いつもキーボードのすぐ上に置き、映像をその上に合わせる。
-             * 映像の下に置く形に切り替えると、映像を動かすたびに置き方の判定が変わり、行ったり来たりした（2026-09-16）
-             */
-            const composing = !IS_ANDROID && !IS_DESKTOP && root.activeElement === q('input');
             if (IS_DESKTOP && window.innerWidth >= 700) {
                 /*
                  * PC の横長の画面では、チャット欄を右側に縦長で置く（2026-09-14）。下に重ねると映像と操作ボタンを隠すため。
@@ -1046,7 +1094,7 @@ const WP_SHIM = (() => {
                 panel.style.left = 'auto';
                 panel.style.width = '360px';
                 panel.dataset.place = 'side';
-            } else if (r && r.height > 0 && room >= MIN_PANEL_PX && !composing) {
+            } else if (r && r.height > 0 && room >= MIN_PANEL_PX) {
                 panel.style.top = `${viewTop + below + 8}px`;
                 panel.style.bottom = 'auto';
                 panel.style.height = `${room}px`;
@@ -1056,14 +1104,8 @@ const WP_SHIM = (() => {
             } else {
                 panel.style.top = 'auto';
                 panel.style.bottom = `${Math.max(8, window.innerHeight - viewTop - viewH + 8)}px`;
-                /*
-                 * iPhone で打っている間（キーボードが出て、見えている範囲が狭い）は、映像の下の残りだけに収める（2026-09-15 ユーザー要望:
-                 * 打つパネルで映画が追いやられた。映像の下が少し切れる程度にしたい）。入力欄の分（約 60px）より狭くはしない。
-                 * 狭いときは見出しとお知らせを隠して、入力欄と直近の発言だけにする。Android は今までどおり
-                 */
-                const h = composing && r && r.height > 0
-                    ? Math.max(60, Math.min(Math.round(viewH * 0.45), Math.round(viewH - r.height - 12)))
-                    : Math.round(Math.min(viewH * 0.45, 420));
+                // 横持ちなど、映像の下に置けないときは下に重ねる（画面の半分より低く抑える）
+                const h = Math.round(Math.min(viewH * 0.45, 420));
                 panel.style.height = `${h}px`;
                 panel.dataset.tight = composing && h < 140 ? '1' : '';
                 panel.dataset.place = 'overlay';
@@ -1212,11 +1254,17 @@ const WP_SHIM = (() => {
             const key = U.messageKey(m);
             if (key) { if (shownMsgs.has(key)) return; shownMsgs.add(key); }
             const box = q('.msgs');
-            const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-            box.appendChild(U.messageRow(m, me));
-            while (box.children.length > 100) box.firstChild.remove();
+            const row = U.messageRow(m, me);
+            if (NEWEST_TOP) {
+                // スマホは**上が最新**（打つときにキーボードで下が隠れてもよいように。2026-09-16 ユーザー要望）
+                box.prepend(row);
+                while (box.children.length > 100) box.lastChild.remove();
+            } else {
+                box.appendChild(row);
+                while (box.children.length > 100) box.firstChild.remove();
+            }
             if (m.senderId === me) stickLatest = true;
-            if (nearEnd || stickLatest) box.scrollTop = box.scrollHeight;
+            if (stickLatest) keepLatest();
             if (!quiet && !open && m.type === 'user' && m.senderId !== me) {
                 unread++;
                 renderBadge();
@@ -1476,7 +1524,9 @@ const WP_SHIM = (() => {
      * 縮めたうえで、箱の上端を見えている範囲の上端に合わせる（translate）。
      * 縦持ちのときだけ。横持ち・PC・再生画面でなくなったときは元に戻す
      */
-    function fitPlayerToVideo(video, portrait, visibleTop = 0) {
+    function fitPlayerToVideo(video, portrait, visibleTop = 0, freeze = false) {
+        // 打っている間は動かさない（キーボードが出ると見えている範囲がずれ、映像が真ん中まで動いてしまった。2026-09-16 実機）
+        if (freeze && video.dataset.wpFit) return;
         const frame = playerFrame(video);
         const vw = video.videoWidth, vh = video.videoHeight;
         const box = video.getBoundingClientRect();
