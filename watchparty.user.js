@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.18
+// @version      0.24.19
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.18";
+    const __WP_VERSION__ = "0.24.19";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -844,7 +844,8 @@ const WP_SHIM = (() => {
         const TOP_BAR_PX = 56;
         /** 見えている範囲の上端（visualViewport のずれ＋上の安全領域） */
         function visibleTop() {
-            const vv = globalThis.visualViewport;
+            // スマホはキーボードのずれ（visualViewport.offsetTop）を数えない（数えると打ち終わりに映像まで動いた。2026-09-16 実機）
+            const vv = IS_DESKTOP ? globalThis.visualViewport : null;
             return (vv ? vv.offsetTop : 0) + (q('.safe') ? q('.safe').getBoundingClientRect().height : 0);
         }
 
@@ -878,7 +879,12 @@ const WP_SHIM = (() => {
              * 置き場所の計算し直しは、画面の大きさや映像の位置が変わったときだけ（2026-09-14）。
              * チャット欄を開いたまま毎秒計算し直すと、本物の Prime でゲストが 3〜4 秒遅れた（止めると 0.7 秒）
              */
-            const vv = globalThis.visualViewport;
+            /*
+             * 2026-09-16 実機（iPhone）: キーボードの出し入れで置き場所を計算し直すと、打ち終わったあとに位置が変わってしまった。
+             * スマホでは**キーボードの出し入れ（visualViewport）では計算し直さない**。上が最新・入力欄も上なので、
+             * 下がキーボードで隠れても困らない。画面の向きや映像の大きさが変わったときだけ置き直す
+             */
+            const vv = IS_DESKTOP ? globalThis.visualViewport : null;
             const r = video ? video.getBoundingClientRect() : null;
             const sig = [window.innerWidth, window.innerHeight, vv ? Math.round(vv.height) : 0, vv ? Math.round(vv.offsetTop) : 0,
                 r ? Math.round(r.top) : -1, r ? Math.round(r.height) : -1, video ? video.videoHeight : 0, open].join('|');
@@ -963,28 +969,36 @@ const WP_SHIM = (() => {
          * 字幕の**文字の大きさだけ**を映像の幅に合わせる（2026-09-16 実機: Android は大きすぎ、iPhone は小さすぎた）。
          * 位置は動かさない（動かすと Amazon の描き直しとぶつかって、字幕がすぐ消えた）
          */
-        const CAPTION_SEL = '[class*="caption" i], [class*="subtitle" i], [class*="timedtext" i], [id*="caption" i], [id*="subtitle" i]';
-        const captionSized = new Set();
+        /*
+         * 2026-09-16 実機: 1秒ごとに字幕の要素へ書き込む形だと、字幕が出るたびに**大きいものが一瞬出てから縮む**（Android でちらついた）。
+         * ページに決まり（スタイル）を1枚入れて、**出た瞬間から**その大きさで描かせる。
+         * iPhone は字幕をブラウザ自身が描くことがある（video::cue）ので、そちらにも同じ大きさを指定する（要素が無く、書き込めないため）。
+         * 位置には触らない（触ると Amazon の描き直しとぶつかって字幕が消えた）
+         */
+        let captionStyleEl = null;
         function sizeCaptions(video) {
             if (IS_DESKTOP) return;
             if (!video) {
-                for (const el of captionSized) { el.style.removeProperty('font-size'); delete el.dataset.wpCapFont; }
-                captionSized.clear();
+                if (captionStyleEl) { captionStyleEl.remove(); captionStyleEl = null; }
                 return;
             }
             const cr = contentRect(video);
             if (!(cr.width > 0)) return;
             const font = Math.max(13, Math.min(20, Math.round(cr.width * 0.045)));
-            for (const el of playerFrame(video).querySelectorAll(CAPTION_SEL)) {
-                if (el.closest('button, a, [role="button"], [class*="button" i]')) continue;   // 字幕のボタンには触らない
-                if (!(el.textContent || '').trim()) continue;
-                const r = el.getBoundingClientRect();
-                if (!(r.width >= cr.width * 0.4)) continue;
-                if (el.dataset.wpCapFont === String(font)) continue;
-                el.style.setProperty('font-size', `${font}px`, 'important');
-                el.dataset.wpCapFont = String(font);
-                captionSized.add(el);
+            if (captionStyleEl && captionStyleEl.isConnected && captionStyleEl.dataset.wpFont === String(font)) return;
+            if (!captionStyleEl) {
+                captionStyleEl = document.createElement('style');
+                captionStyleEl.id = 'wp-caption-size';
             }
+            // 字幕のボタン（オン・オフ）は対象にしない
+            const notBtn = ':not(button):not([role="button"]):not([class*="button" i])';
+            const sel = ['caption', 'subtitle', 'timedtext']
+                .flatMap(k => [`[class*="${k}" i]${notBtn}`, `[class*="${k}" i]${notBtn} *`]).join(',\n');
+            captionStyleEl.textContent =
+                `${sel} { font-size: ${font}px !important; line-height: 1.35 !important; }\n` +
+                `video::cue { font-size: ${font}px !important; }`;
+            captionStyleEl.dataset.wpFont = String(font);
+            if (!captionStyleEl.isConnected) document.documentElement.appendChild(captionStyleEl);
         }
 
         function tidyAround(video) {
@@ -1068,7 +1082,12 @@ const WP_SHIM = (() => {
         function placePanel() {
             if (!open) return;
             const panel = q('.panel');
-            const vv = globalThis.visualViewport;
+            /*
+             * スマホは**キーボードが出ても置き場所を変えない**（2026-09-16 実機: 打ち終わったあとに位置が変わってしまった）。
+             * 見えている範囲（visualViewport）ではなく、画面そのもの（window）で置く。
+             * 上が最新・入力欄も上なので、下がキーボードで隠れても困らない
+             */
+            const vv = IS_DESKTOP ? globalThis.visualViewport : null;
             const viewH = vv ? vv.height : window.innerHeight;
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
