@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.9
+// @version      0.24.10
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.9";
+    const __WP_VERSION__ = "0.24.10";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -945,6 +945,13 @@ const WP_SHIM = (() => {
                 for (const sib of node.parentElement.children) {
                     if (sib === node || sib === host || sib.contains(host) || /^(SCRIPT|STYLE|LINK)$/.test(sib.tagName)) continue;
                     const r = sib.getBoundingClientRect();
+                    /*
+                     * いま大きさがゼロのものは触らない（2026-09-16 iPhone 実機: 全画面・字幕のボタンが消え、字幕をオンにしても出なくなった）。
+                     * プレイヤーの操作ボタンや字幕の層は、出ていない間は大きさがゼロ。それを「外枠に重ならない部品」とみなして
+                     * 隠してしまい、あとから出てきても隠れたままになっていた。この見回しは毎秒動くので、
+                     * 出てきて大きさを持った時点で、あらためて隠すかどうかを決める
+                     */
+                    if (r.width === 0 || r.height === 0) continue;
                     const layer = overlaps(r, fr) && r.height <= fr.height * 1.25 + 8 && r.width <= fr.width * 1.25 + 8;
                     if (!layer) hideEl(sib);
                 }
