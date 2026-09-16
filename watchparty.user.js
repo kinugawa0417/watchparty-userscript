@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.12
+// @version      0.24.13
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.12";
+    const __WP_VERSION__ = "0.24.13";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -700,13 +700,6 @@ const WP_SHIM = (() => {
                 .pop { border: 0; border-radius: 8px; background: rgba(58,58,70,.6); color: #fff; min-width: 44px; min-height: 40px; font-size: 16px; cursor: pointer; }
                 .panel[data-place="side"] input { background: rgba(20,20,26,.55); border-color: rgba(255,255,255,.2); }
                 .panel[data-place="side"] .close { background: rgba(58,58,70,.6); }
-                /*
-                 * 映像を触っている間だけ、チャット欄を薄くして触れないようにする（2026-09-16 ユーザー報告）。
-                 * スマホの縦持ちでは、プレイヤーの操作バー（字幕・全画面）が映像の下のほうに出るため、
-                 * チャット欄の裏に入って押せなかった（横にすると置き方が変わるので出てきた）。
-                 * 映像をタップしたら数秒どく。チャット欄を触ればすぐ戻る
-                 */
-                .panel[data-away="1"] { opacity: .12; pointer-events: none; transition: opacity .15s; }
                 /* iPhone で打っている間の狭いチャット欄: 入力欄と直近の発言だけ */
                 .panel[data-tight="1"] .phead, .panel[data-tight="1"] .notice { display: none; }
                 .panel[data-tight="1"] { gap: 4px; padding: 6px; }
@@ -922,15 +915,16 @@ const WP_SHIM = (() => {
             }
         }
         /*
-         * 字幕を、映っている映像の中の一番下へ移す（2026-09-16 ユーザー要望）。
+         * 字幕を、映っている映像の**真ん中に固定**して出す（2026-09-16 ユーザー要望）。
          *
          * Amazon / Netflix は字幕を「プレイヤーの箱の下のほう」に描く。箱は画面の高さいっぱいで、映像は上のほうに
          * 映っているので、字幕は映像の外（＝下に置いたチャット欄の裏）に出てしまい読めなかった（Android 実機）。
-         * 字幕の層を見つけて、映像の下端の少し上へ **translate で移す**（相手の作りは変えない）。
-         * 元の位置からの差で毎回計算するので、ずれが積み重ならない。字幕が無い間は何もしない。
+         * 下端に合わせて動かしていたら、相手の描き直しとぶつかって**ちらついた**（2026-09-16 実機）。
+         * 置き場所を毎回計算するのをやめ、**映像の真ん中に固定**する。文字の大きさも映像の幅から決める
+         * （相手は箱の高さで決めていて、縦長の箱だと文字が巨大になった）。字幕が無い間は何もしない。
          */
         const CAPTION_SEL = '[class*="caption" i], [class*="subtitle" i], [class*="timedtext" i], [id*="caption" i], [id*="subtitle" i]';
-        const CAPTION_GAP = 8;
+        const CAPTION_PROPS = ['position', 'left', 'right', 'top', 'bottom', 'width', 'height', 'transform', 'font-size', 'line-height', 'text-align', 'margin'];
         const captionMoved = new Set();
         function placeCaptions(video) {
             if (IS_DESKTOP) return;               // PC は映像が画面いっぱいで、字幕も映像の中に出る
@@ -938,29 +932,35 @@ const WP_SHIM = (() => {
             const frame = playerFrame(video);
             const cr = contentRect(video);
             if (!(cr.height > 0)) return;
+            // 文字の大きさは映像の幅から決める（相手の作りは箱の高さで決めていて、縦長の箱だと巨大になる）
+            const font = Math.max(13, Math.min(20, Math.round(cr.width * 0.045)));
+            const top = Math.round(cr.top + cr.height / 2);
             for (const el of frame.querySelectorAll(CAPTION_SEL)) {
                 if (el === video || el.contains(video)) continue;
-                const applied = Number(el.dataset.wpCap || 0);
-                const r = el.getBoundingClientRect();
-                if (!(r.width > 0 && r.height > 0)) continue;
-                const originalBottom = r.bottom - applied;          // 動かす前の下端
-                const want = Math.round(originalBottom - (cr.bottom - CAPTION_GAP));
-                // 映像の中に収まっているなら触らない（下にはみ出している分だけ上へ）
-                const next = want > 2 ? -want : 0;
-                if (next === applied) continue;
-                if (next) {
-                    el.style.setProperty('translate', `0 ${next}px`, 'important');
-                    el.dataset.wpCap = String(next);
-                    captionMoved.add(el);
-                } else {
-                    el.style.removeProperty('translate');
-                    delete el.dataset.wpCap;
-                    captionMoved.delete(el);
-                }
+                const sig = `${Math.round(cr.left)}|${Math.round(cr.width)}|${top}|${font}`;
+                if (el.dataset.wpCap === sig) continue;     // 同じ置き場所なら触らない（毎秒書き換えるとちらつく）
+                el.style.setProperty('position', 'fixed', 'important');
+                el.style.setProperty('left', `${Math.round(cr.left)}px`, 'important');
+                el.style.setProperty('width', `${Math.round(cr.width)}px`, 'important');
+                el.style.setProperty('top', `${top}px`, 'important');
+                el.style.setProperty('height', 'auto', 'important');
+                // 元の指定（bottom / right）が残っていると、上下に引き伸ばされて巨大な箱になる（2026-09-16）
+                el.style.setProperty('bottom', 'auto', 'important');
+                el.style.setProperty('right', 'auto', 'important');
+                el.style.setProperty('transform', 'translateY(-50%)', 'important');
+                el.style.setProperty('font-size', `${font}px`, 'important');
+                el.style.setProperty('line-height', '1.35', 'important');
+                el.style.setProperty('text-align', 'center', 'important');
+                el.style.setProperty('margin', '0', 'important');
+                el.dataset.wpCap = sig;
+                captionMoved.add(el);
             }
         }
         function resetCaptions() {
-            for (const el of captionMoved) { el.style.removeProperty('translate'); delete el.dataset.wpCap; }
+            for (const el of captionMoved) {
+                for (const p of CAPTION_PROPS) el.style.removeProperty(p);
+                delete el.dataset.wpCap;
+            }
             captionMoved.clear();
         }
 
@@ -1268,39 +1268,7 @@ const WP_SHIM = (() => {
             }
         }
 
-        /*
-         * 映像を触ったら、チャット欄を数秒どかす（スマホの縦持ちで、プレイヤーの操作バーがチャット欄の裏に入るため。2026-09-16）。
-         * プレイヤーの操作バーは数秒で自分で消えるので、こちらも同じくらいで戻す。チャット欄を触ればすぐ戻る
-         */
-        const AWAY_MS = 5000;
-        let awayTimer = null;
-        function stepAside() {
-            if (IS_DESKTOP || !open) return;
-            const panel = q('.panel');
-            panel.dataset.away = '1';
-            /*
-             * どいている間はチャット欄を触れない（pointer-events: none）ので、戻す手段として 💬 を出しておく
-             * （2026-09-16 実機: どいたままチャットを開けなくなった。チャット欄を触ろうとしても下のページに届き、また数秒どいてしまう）
-             */
-            q('.fab').hidden = false;
-            clearTimeout(awayTimer);
-            awayTimer = setTimeout(() => { panel.dataset.away = ''; q('.fab').hidden = open; }, AWAY_MS);
-        }
-        function comeBack() {
-            clearTimeout(awayTimer);
-            q('.panel').dataset.away = '';
-            q('.fab').hidden = open;
-        }
-        for (const type of ['pointerdown', 'touchstart']) {
-            // ページ側（映像・プレイヤーの操作バー）を触ったときだけ。こちらの画面を触ったときは戻す
-            window.addEventListener(type, (ev) => {
-                const path = typeof ev.composedPath === 'function' ? ev.composedPath() : [];
-                if (path.includes(host)) comeBack(); else stepAside();
-            }, { capture: true, passive: true });
-        }
-
-        // どいている間の 💬 は「チャット欄を戻す」ボタンにもなる
-        q('.fab').addEventListener('click', () => { comeBack(); setOpen(true); });
+        q('.fab').addEventListener('click', () => setOpen(true));
         q('.close').addEventListener('click', () => { userClosed = true; setOpen(false); });
         q('.refix').addEventListener('click', fixPlayback);
         q('.fix .go').addEventListener('click', fixPlayback);
