@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.7
+// @version      0.24.9
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.7";
+    const __WP_VERSION__ = "0.24.9";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -774,6 +774,36 @@ const WP_SHIM = (() => {
         let open = false;
         let unread = 0;
 
+        /*
+         * 発言の欄は、人がさかのぼって読んでいるとき以外は、いつも一番下（最新）を見せる
+         * （2026-09-16 Android 実機: 送ってキーボードが閉じると欄の大きさが変わり、上の古い発言に戻って最新が見えなくなった）。
+         * 一番下にいるかは、人が指やホイールで動かしたときだけ覚え直す（大きさが変わって勝手に動いたときは覚え直さない）
+         */
+        let stickLatest = true;
+        let msgsTouchedAt = 0;
+        function keepLatest() {
+            const box = q('.msgs');
+            if (stickLatest && box) box.scrollTop = box.scrollHeight;
+        }
+        {
+            const box = q('.msgs');
+            for (const type of ['touchstart', 'touchmove', 'wheel', 'pointerdown']) {
+                box.addEventListener(type, () => { msgsTouchedAt = Date.now(); }, { passive: true });
+            }
+            box.addEventListener('scroll', () => {
+                if (Date.now() - msgsTouchedAt > 1500) return;
+                stickLatest = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+            }, { passive: true });
+            if (globalThis.ResizeObserver) new ResizeObserver(() => keepLatest()).observe(box);
+            // 打ち始め・打ち終わり（キーボードの出し入れ）でも置き直して、最新を見せる
+            const input = q('input');
+            for (const type of ['focus', 'blur']) {
+                input.addEventListener(type, () => {
+                    for (const ms of [60, 400, 900]) setTimeout(() => { placePanel(); keepLatest(); }, ms);
+                });
+            }
+        }
+
         function setOpen(v) {
             open = v;
             q('.panel').hidden = !open;
@@ -783,7 +813,8 @@ const WP_SHIM = (() => {
             if (open) {
                 unread = 0;
                 placePanel();
-                q('.msgs').scrollTop = q('.msgs').scrollHeight;
+                stickLatest = true;
+                keepLatest();
             }
             renderBadge();
         }
@@ -803,6 +834,22 @@ const WP_SHIM = (() => {
         }
 
         /*
+         * 映像の上端をどこに合わせるか。ふつうは見えている範囲の上端。
+         * iPhone で打っている間は、チャット欄（キーボードのすぐ上に出ている）の上に映像の下端が来る所にする
+         * （2026-09-16 iPhone 実機: 打とうとすると映像が下へ押しやられ、チャット欄とアドレスバーの後ろに隠れて上は真っ黒になった。
+         * キーボードが出ると Safari は見えている範囲をずらし、その量と要素の位置の測り方が合わない。
+         * 実際に見えているチャット欄の位置は同じ測り方なので、それを基準にすればずれない）
+         */
+        function videoTopTarget(video) {
+            const panel = q('.panel');
+            if (!IS_ANDROID && !IS_DESKTOP && open && root.activeElement === q('input') && panel.dataset.place === 'overlay') {
+                const pr = panel.getBoundingClientRect();
+                if (pr.height > 0) return pr.top - 4 - contentRect(video).height;
+            }
+            return visibleTop();
+        }
+
+        /*
          * 2026-09-14 ユーザー要望: チャットを見ながら観る前提なので、縦持ちの映像はチャット欄の開け閉めに関係なく
          * いつも見えている範囲の一番上に置く。チャット欄は、再生画面が出たら最初から開く
          * （作品ページの段階では開かない。「続きを観る」などのボタンを隠してしまうため）。自分で閉じたら勝手に開かない。
@@ -812,7 +859,7 @@ const WP_SHIM = (() => {
         function layoutTick() {
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) shiftUp(video, portrait, visibleTop());
+            if (video) shiftUp(video, portrait, videoTopTarget(video));
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
             if (playerShown && !open && !userClosed) setOpen(true);
             if (!IS_ANDROID && !IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
@@ -938,10 +985,15 @@ const WP_SHIM = (() => {
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) shiftUp(video, portrait, visibleTop());
+            if (video) shiftUp(video, portrait, videoTopTarget(video));
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
+            /*
+             * iPhone で打っている間（キーボードが出ている）は、いつもキーボードのすぐ上に置き、映像をその上に合わせる。
+             * 映像の下に置く形に切り替えると、映像を動かすたびに置き方の判定が変わり、行ったり来たりした（2026-09-16）
+             */
+            const composing = !IS_ANDROID && !IS_DESKTOP && root.activeElement === q('input');
             if (IS_DESKTOP && window.innerWidth >= 700) {
                 /*
                  * PC の横長の画面では、チャット欄を右側に縦長で置く（2026-09-14）。下に重ねると映像と操作ボタンを隠すため。
@@ -953,7 +1005,7 @@ const WP_SHIM = (() => {
                 panel.style.left = 'auto';
                 panel.style.width = '360px';
                 panel.dataset.place = 'side';
-            } else if (r && r.height > 0 && room >= MIN_PANEL_PX) {
+            } else if (r && r.height > 0 && room >= MIN_PANEL_PX && !composing) {
                 panel.style.top = `${viewTop + below + 8}px`;
                 panel.style.bottom = 'auto';
                 panel.style.height = `${room}px`;
@@ -968,7 +1020,6 @@ const WP_SHIM = (() => {
                  * 打つパネルで映画が追いやられた。映像の下が少し切れる程度にしたい）。入力欄の分（約 60px）より狭くはしない。
                  * 狭いときは見出しとお知らせを隠して、入力欄と直近の発言だけにする。Android は今までどおり
                  */
-                const composing = !IS_ANDROID && !IS_DESKTOP && root.activeElement === q('input');
                 const h = composing && r && r.height > 0
                     ? Math.max(60, Math.min(Math.round(viewH * 0.45), Math.round(viewH - r.height - 12)))
                     : Math.round(Math.min(viewH * 0.45, 420));
@@ -976,7 +1027,10 @@ const WP_SHIM = (() => {
                 panel.dataset.tight = composing && h < 140 ? '1' : '';
                 panel.dataset.place = 'overlay';
                 panel.style.left = ''; panel.style.width = '';
+                // 打っている間は、置いたチャット欄の位置に合わせて映像を置き直す（videoTopTarget）
+                if (composing && video) shiftUp(video, portrait, videoTopTarget(video));
             }
+            keepLatest();
             reportLayout(video, r, panel);
         }
 
@@ -1122,7 +1176,8 @@ const WP_SHIM = (() => {
             const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
             box.appendChild(U.messageRow(m, me));
             while (box.children.length > 100) box.firstChild.remove();
-            if (nearEnd || m.senderId === me) box.scrollTop = box.scrollHeight;
+            if (m.senderId === me) stickLatest = true;
+            if (nearEnd || stickLatest) box.scrollTop = box.scrollHeight;
             if (!quiet && !open && m.type === 'user' && m.senderId !== me) {
                 unread++;
                 renderBadge();
@@ -1158,6 +1213,8 @@ const WP_SHIM = (() => {
             if (!text || !connected) return;
             socket.emit('send-message', { message: text });
             input.value = '';
+            stickLatest = true;
+            keepLatest();
         });
 
         // --- 再生が止められたとき ------------------------------------------------
@@ -1443,6 +1500,7 @@ const WP_SHIM = (() => {
     WP_SHIM.start(target);
 
     // ---- extension/adapters/base.js ----
+// Watch Party adapters/base.js（2026-09-16 Defender の誤検知で消されたため、同じ中身で戻したもの）
 /**
  * サービスアダプタの基底クラス。
  *
@@ -2141,6 +2199,7 @@ const WP_SHIM = (() => {
 })();
 
     // ---- extension/adapters/netflix.js ----
+// Watch Party adapters/netflix.js（2026-09-16 Defender の誤検知で消されたため、同じ中身で戻したもの）
 /**
  * Netflix アダプタ。
  *
