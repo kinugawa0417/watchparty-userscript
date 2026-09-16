@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.19
+// @version      0.24.20
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.19";
+    const __WP_VERSION__ = "0.24.20";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -849,6 +849,17 @@ const WP_SHIM = (() => {
             return (vv ? vv.offsetTop : 0) + (q('.safe') ? q('.safe').getBoundingClientRect().height : 0);
         }
 
+        /*
+         * キーボードが出たときの画面のずれ（2026-09-16 実機・iPhone）。
+         * iPhone は入力欄を出すと画面全体を上へずらす。ページの中身（映像）はそのずれで一緒に動くが、
+         * こちらのチャット欄は画面に貼り付けてある（position: fixed）ので動かず、**見た目だけが上へ飛ぶ**。
+         * ずれた分だけチャット欄を下げて、見た目を変えない
+         */
+        function keyboardShift() {
+            const vv = globalThis.visualViewport;
+            return !IS_DESKTOP && vv ? Math.round(vv.offsetTop) : 0;
+        }
+
 
         /*
          * 2026-09-14 ユーザー要望: チャットを見ながら観る前提なので、縦持ちの映像はチャット欄の開け閉めに関係なく
@@ -862,8 +873,7 @@ const WP_SHIM = (() => {
             const portrait = window.innerHeight > window.innerWidth;
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
             // プレイヤーの箱を映像の大きさに縮めて、画面の一番上へ（操作ボタンと字幕を映像の中に収める）
-            const typing = root.activeElement === q('input');
-            if (video) fitPlayerToVideo(video, playerShown && portrait, visibleTop(), typing);
+            if (video) fitPlayerToVideo(video, playerShown && portrait, visibleTop());
             // 一度でも再生が始まったか（ゲストに要らないボタンを隠すのは、始まってから）
             if (playerShown && video.currentTime > 0.5 && !video.paused) startedOnce = true;
             hideGuestControls(playerShown ? video : null);
@@ -887,6 +897,7 @@ const WP_SHIM = (() => {
             const vv = IS_DESKTOP ? globalThis.visualViewport : null;
             const r = video ? video.getBoundingClientRect() : null;
             const sig = [window.innerWidth, window.innerHeight, vv ? Math.round(vv.height) : 0, vv ? Math.round(vv.offsetTop) : 0,
+                keyboardShift(),   // キーボードで画面がずれたら置き直す（見た目を変えないため）
                 r ? Math.round(r.top) : -1, r ? Math.round(r.height) : -1, video ? video.videoHeight : 0, open].join('|');
             if (sig !== lastLayoutSig) {
                 lastLayoutSig = sig;
@@ -1090,6 +1101,8 @@ const WP_SHIM = (() => {
             const vv = IS_DESKTOP ? globalThis.visualViewport : null;
             const viewH = vv ? vv.height : window.innerHeight;
             const viewTop = vv ? vv.offsetTop : 0;
+            // スマホ: キーボードで画面がずれた分。その分だけ下げて、見た目の位置を変えない
+            const kb = keyboardShift();
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
             /*
@@ -1098,7 +1111,7 @@ const WP_SHIM = (() => {
              * 動かしていた頃は、映像の置き場所まで一緒に動いて崩れていた
              */
             const composing = !IS_DESKTOP && root.activeElement === q('input');
-            if (video) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop(), composing);
+            if (video) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop());
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
@@ -1114,7 +1127,7 @@ const WP_SHIM = (() => {
                 panel.style.width = '360px';
                 panel.dataset.place = 'side';
             } else if (r && r.height > 0 && room >= MIN_PANEL_PX) {
-                panel.style.top = `${viewTop + below + 8}px`;
+                panel.style.top = `${kb + viewTop + below + 8}px`;
                 panel.style.bottom = 'auto';
                 panel.style.height = `${room}px`;
                 panel.dataset.place = 'below-video';
@@ -1122,7 +1135,7 @@ const WP_SHIM = (() => {
                 panel.style.left = ''; panel.style.width = '';
             } else {
                 panel.style.top = 'auto';
-                panel.style.bottom = `${Math.max(8, window.innerHeight - viewTop - viewH + 8)}px`;
+                panel.style.bottom = `${Math.max(8, window.innerHeight - viewTop - viewH + 8 - kb)}px`;
                 // 横持ちなど、映像の下に置けないときは下に重ねる（画面の半分より低く抑える）
                 const h = Math.round(Math.min(viewH * 0.45, 420));
                 panel.style.height = `${h}px`;
@@ -1543,9 +1556,11 @@ const WP_SHIM = (() => {
      * 縮めたうえで、箱の上端を見えている範囲の上端に合わせる（translate）。
      * 縦持ちのときだけ。横持ち・PC・再生画面でなくなったときは元に戻す
      */
-    function fitPlayerToVideo(video, portrait, visibleTop = 0, freeze = false) {
-        // 打っている間は動かさない（キーボードが出ると見えている範囲がずれ、映像が真ん中まで動いてしまった。2026-09-16 実機）
-        if (freeze && video.dataset.wpFit) return;
+    function fitPlayerToVideo(video, portrait, visibleTop = 0) {
+        /*
+         * 打っている間も合わせ直す（2026-09-16 実機）。iPhone はキーボードを出すと画面全体を上へずらすので、
+         * 止めてしまうと映像が画面の外へ出てしまった。毎回合わせ直せば、見た目の位置は変わらない
+         */
         const frame = playerFrame(video);
         const vw = video.videoWidth, vh = video.videoHeight;
         const box = video.getBoundingClientRect();
