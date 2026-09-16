@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.13
+// @version      0.24.14
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.13";
+    const __WP_VERSION__ = "0.24.14";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -937,6 +937,15 @@ const WP_SHIM = (() => {
             const top = Math.round(cr.top + cr.height / 2);
             for (const el of frame.querySelectorAll(CAPTION_SEL)) {
                 if (el === video || el.contains(video)) continue;
+                /*
+                 * 動かすのは**字幕の文字**だけ。字幕のオン・オフの**ボタン**まで真ん中へ動かしてしまったので、
+                 * 押せるもの（ボタン・リンク）と、名前に button が入るもの、幅の狭いものは対象にしない（2026-09-16 実機）
+                 */
+                if (el.closest('button, a, [role="button"], [class*="button" i]')) continue;
+                const text = (el.textContent || '').trim();
+                if (!text) continue;                        // 字幕が出ていない間は何もしない
+                const box = el.getBoundingClientRect();
+                if (!(box.width >= cr.width * 0.4)) continue;   // ボタンのような小さいものは字幕ではない
                 const sig = `${Math.round(cr.left)}|${Math.round(cr.width)}|${top}|${font}`;
                 if (el.dataset.wpCap === sig) continue;     // 同じ置き場所なら触らない（毎秒書き換えるとちらつく）
                 el.style.setProperty('position', 'fixed', 'important');
