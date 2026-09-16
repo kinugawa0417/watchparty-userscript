@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.16
+// @version      0.24.17
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.16";
+    const __WP_VERSION__ = "0.24.17";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -846,8 +846,12 @@ const WP_SHIM = (() => {
         function layoutTick() {
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) resetVideoShift(video);
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
+            // プレイヤーの箱を映像の大きさに縮めて、画面の一番上へ（操作ボタンと字幕を映像の中に収める）
+            if (video) fitPlayerToVideo(video, playerShown && portrait, visibleTop());
+            // 一度でも再生が始まったか（ゲストに要らないボタンを隠すのは、始まってから）
+            if (playerShown && video.currentTime > 0.5 && !video.paused) startedOnce = true;
+            hideGuestControls(playerShown ? video : null);
             if (playerShown && !open && !userClosed) setOpen(true);
             if (!IS_ANDROID && !IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
             if (IS_ANDROID && playerShown && portrait) scrollVideoToTop(video);
@@ -906,6 +910,36 @@ const WP_SHIM = (() => {
          * （スマホの縦持ちでは、字幕がチャット欄の裏に入ることがある。読みたいときは ✕ でチャット欄を閉じる）
          */
 
+        /*
+         * ゲストが押す必要のないプレイヤーのボタンを隠す（2026-09-16 ユーザー要望）。
+         * 再生・一時停止・早送り・巻き戻し・次の話は、押してもこちらがホストに合わせ直すので意味がなく、かえってずれる。
+         * 字幕・音声・音量・全画面は押してもらう必要があるので残す。
+         * 最初の再生だけは人が触らないと始まらない端末があるので、**一度再生が始まってから**隠す
+         */
+        const GUEST_HIDE = /再生|一時停止|停止|早送り|巻き戻し|\d+\s*秒(進|戻)|次の(エピソード|話)|前の(エピソード|話)|スキップ|Play\b|Pause|Forward|Rewind|Next\s*(episode|up)|Skip/i;
+        const GUEST_KEEP = /字幕|音声|吹き替え|音量|ミュート|全画面|フルスクリーン|設定|Subtitle|Caption|Audio|Volume|Mute|Fullscreen|Settings/i;
+        const guestHidden = new Set();
+        let startedOnce = false;
+        function hideGuestControls(video) {
+            if (IS_DESKTOP) return;
+            if (!video || !startedOnce) {
+                if (!video) {
+                    for (const el of guestHidden) { el.style.removeProperty('visibility'); el.style.removeProperty('pointer-events'); }
+                    guestHidden.clear();
+                }
+                return;
+            }
+            const frame = playerFrame(video);
+            for (const el of frame.querySelectorAll('button, [role="button"]')) {
+                if (guestHidden.has(el)) continue;
+                const name = `${el.textContent || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`;
+                if (!GUEST_HIDE.test(name) || GUEST_KEEP.test(name)) continue;
+                el.style.setProperty('visibility', 'hidden', 'important');
+                el.style.setProperty('pointer-events', 'none', 'important');
+                guestHidden.add(el);
+            }
+        }
+
         function tidyAround(video) {
             if (!video) {
                 // 打ち始めなどで一瞬だけ映像が測れないことがある。5秒続いたら（再生画面を閉じたら）元に戻す
@@ -926,7 +960,13 @@ const WP_SHIM = (() => {
              */
             const shift = Number(video.dataset.wpShift || 0);
             const fb = frame.getBoundingClientRect();
-            const fr = { left: fb.left, right: fb.right, top: fb.top + shift, bottom: fb.bottom + shift, width: fb.width, height: fb.height };
+            /*
+             * 大きさは**縮める前の箱**で比べる（2026-09-16）。プレイヤーの箱を映像の大きさに縮めたので、
+             * 縮めたあとの大きさで比べると、プレイヤーの操作ボタンの層まで「外枠より大きい」とみなして隠してしまう
+             */
+            const originalH = Number(video.dataset.wpFitFrom || 0) || fb.height;
+            const fr = { left: fb.left, right: fb.right, top: fb.top + shift, bottom: fb.top + shift + originalH,
+                width: fb.width, height: originalH };
             const cr = contentRect(video);
             const overlaps = (a, b) => a.width > 0 && a.height > 0 && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
             /*
@@ -986,7 +1026,7 @@ const WP_SHIM = (() => {
             const viewTop = vv ? vv.offsetTop : 0;
             const video = layoutVideo();
             const portrait = window.innerHeight > window.innerWidth;
-            if (video) resetVideoShift(video);
+            if (video) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop());
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
@@ -1006,24 +1046,6 @@ const WP_SHIM = (() => {
                 panel.style.left = 'auto';
                 panel.style.width = '360px';
                 panel.dataset.place = 'side';
-            } else if (!IS_ANDROID && !IS_DESKTOP && portrait && !composing && r && r.height > 0 &&
-                       Math.round(r.top - viewTop) - TOP_BAR_PX - 8 >= MIN_PANEL_PX) {
-                /*
-                 * iPhone の縦持ち: 映像は動かさず（箱の真ん中のまま）、**上の余白をチャット欄にする**（2026-09-16 ユーザー案）。
-                 * 映像を上へ寄せると、プレイヤーの操作ボタンや字幕が画面の外・チャット欄の裏へ行ってしまうため。
-                 * 下の余白には Amazon の字幕がそのまま出るので読める。打つ間だけキーボードの上へ移る（下の overlay）。
-                 *
-                 * 画面の一番上（TOP_BAR_PX）は空ける。そこにプレイヤーの字幕・全画面・戻るのボタンが出るので、
-                 * こちらの見出しの 🔄 や ✕ と重ならないようにする（2026-09-16 ユーザー指摘）
-                 */
-                const top = viewTop + TOP_BAR_PX;
-                const above = Math.round(r.top - top) - 8;
-                panel.style.top = `${top}px`;
-                panel.style.bottom = 'auto';
-                panel.style.height = `${above}px`;
-                panel.dataset.place = 'above-video';
-                panel.dataset.tight = '';
-                panel.style.left = ''; panel.style.width = '';
             } else if (r && r.height > 0 && room >= MIN_PANEL_PX && !composing) {
                 panel.style.top = `${viewTop + below + 8}px`;
                 panel.style.bottom = 'auto';
@@ -1444,18 +1466,54 @@ const WP_SHIM = (() => {
      * （iPhone の時刻の帯＝安全領域、見えている範囲のずれ visualViewport.offsetTop）。見えている上端に合わせる。
      * 上にはみ出している映像は下へずらす（want が負）。
      */
-    function resetVideoShift(video) {
-        /*
-         * 2026-09-16 ユーザー案: **映像は動かさない**（箱の真ん中のまま）。上へ寄せると、プレイヤーの操作ボタン
-         * （字幕・全画面）や字幕が画面の外・チャット欄の裏へ行ってしまった。
-         * 代わりに、映像の上の余白へチャット欄を置く（placePanel の 'above-video'）。
-         * ここでは、前の版で付けた寄せ方（translate / object-position）を元に戻すだけ
-         */
-        if (!IS_ANDROID) video.style.removeProperty('object-position');
+    /*
+     * プレイヤーの箱を映像の大きさに縮めて、画面の一番上に固定する（2026-09-16 ユーザー案）。
+     *
+     * これまでは「箱ごと上へずらす」「中の映像だけ上へ寄せる」を試したが、どちらも
+     * プレイヤーの操作ボタン（字幕・全画面）や字幕が、画面の外やチャット欄の裏へ行ってしまった。
+     * 箱は画面の高さいっぱいで、その中に映像が上下の黒帯つきで入っているのが原因。
+     * **箱そのものを映像の高さに縮めれば**、箱の中に置かれている操作ボタンも字幕も、映像の中に収まる。
+     * 縮めたうえで、箱の上端を見えている範囲の上端に合わせる（translate）。
+     * 縦持ちのときだけ。横持ち・PC・再生画面でなくなったときは元に戻す
+     */
+    function fitPlayerToVideo(video, portrait, visibleTop = 0) {
+        const frame = playerFrame(video);
+        const vw = video.videoWidth, vh = video.videoHeight;
+        const box = video.getBoundingClientRect();
+        if (!portrait || IS_DESKTOP || !vw || !vh || !(box.width > 0)) { resetPlayerFit(video, frame); return; }
+
+        // 映像の縦横比から、この幅での高さを出す（画面より高くはしない）
+        const want = Math.min(Math.round(box.width * vh / vw), Math.round(window.innerHeight * 0.75));
+        if (Math.abs(Math.round(box.height) - want) > 2) {
+            // 縮める前の高さを覚えておく（プレイヤーの層かどうかの見分けに使う。tidyAround）
+            if (!video.dataset.wpFitFrom) video.dataset.wpFitFrom = String(Math.round(box.height));
+            frame.style.setProperty('height', `${want}px`, 'important');
+            if (frame !== video) video.style.setProperty('height', '100%', 'important');
+            video.dataset.wpFit = String(want);
+        }
+        // 縮めた箱を、見えている範囲の上端へ
+        const applied = Number(video.dataset.wpShift || 0);
+        const top = frame.getBoundingClientRect().top + applied;
+        const d = Math.round(top - visibleTop);
+        if (Math.abs(d - applied) > 2) {
+            if (d) frame.style.setProperty('translate', `0 ${-d}px`, 'important');
+            else frame.style.removeProperty('translate');
+            video.dataset.wpShift = String(d);
+        }
+    }
+
+    function resetPlayerFit(video, frame = playerFrame(video)) {
+        if (video.dataset.wpFit) {
+            frame.style.removeProperty('height');
+            if (frame !== video) video.style.removeProperty('height');
+            delete video.dataset.wpFit;
+            delete video.dataset.wpFitFrom;
+        }
         if (Number(video.dataset.wpShift || 0)) {
-            playerFrame(video).style.removeProperty('translate');
+            frame.style.removeProperty('translate');
             delete video.dataset.wpShift;
         }
+        video.style.removeProperty('object-position');
     }
 
 
