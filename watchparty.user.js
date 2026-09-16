@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.14
+// @version      0.24.15
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.14";
+    const __WP_VERSION__ = "0.24.15";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -863,8 +863,6 @@ const WP_SHIM = (() => {
             const playerShown = Boolean(video) && video.getBoundingClientRect().width >= 200 && video.videoHeight > 0;
             if (playerShown && !open && !userClosed) setOpen(true);
             if (!IS_ANDROID && !IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
-            // 字幕は映像の中の一番下へ（Android も含む。字幕の層だけを動かし、映像とプレイヤーの枠には触らない）
-            placeCaptions(playerShown && portrait ? video : null);
             if (IS_ANDROID && playerShown && portrait) scrollVideoToTop(video);
             /*
              * 置き場所の計算し直しは、画面の大きさや映像の位置が変わったときだけ（2026-09-14）。
@@ -915,63 +913,11 @@ const WP_SHIM = (() => {
             }
         }
         /*
-         * 字幕を、映っている映像の**真ん中に固定**して出す（2026-09-16 ユーザー要望）。
-         *
-         * Amazon / Netflix は字幕を「プレイヤーの箱の下のほう」に描く。箱は画面の高さいっぱいで、映像は上のほうに
-         * 映っているので、字幕は映像の外（＝下に置いたチャット欄の裏）に出てしまい読めなかった（Android 実機）。
-         * 下端に合わせて動かしていたら、相手の描き直しとぶつかって**ちらついた**（2026-09-16 実機）。
-         * 置き場所を毎回計算するのをやめ、**映像の真ん中に固定**する。文字の大きさも映像の幅から決める
-         * （相手は箱の高さで決めていて、縦長の箱だと文字が巨大になった）。字幕が無い間は何もしない。
+         * 字幕には手を出さない（2026-09-16 ユーザー判断）。
+         * 一度は「映像の中の一番下へ移す」「映像の真ん中に固定する」を試したが、Amazon 側の描き直しとぶつかって
+         * **字幕がすぐ消える**ようになった。位置も含めて Amazon の標準のままにする。
+         * （スマホの縦持ちでは、字幕がチャット欄の裏に入ることがある。読みたいときは ✕ でチャット欄を閉じる）
          */
-        const CAPTION_SEL = '[class*="caption" i], [class*="subtitle" i], [class*="timedtext" i], [id*="caption" i], [id*="subtitle" i]';
-        const CAPTION_PROPS = ['position', 'left', 'right', 'top', 'bottom', 'width', 'height', 'transform', 'font-size', 'line-height', 'text-align', 'margin'];
-        const captionMoved = new Set();
-        function placeCaptions(video) {
-            if (IS_DESKTOP) return;               // PC は映像が画面いっぱいで、字幕も映像の中に出る
-            if (!video) { resetCaptions(); return; }
-            const frame = playerFrame(video);
-            const cr = contentRect(video);
-            if (!(cr.height > 0)) return;
-            // 文字の大きさは映像の幅から決める（相手の作りは箱の高さで決めていて、縦長の箱だと巨大になる）
-            const font = Math.max(13, Math.min(20, Math.round(cr.width * 0.045)));
-            const top = Math.round(cr.top + cr.height / 2);
-            for (const el of frame.querySelectorAll(CAPTION_SEL)) {
-                if (el === video || el.contains(video)) continue;
-                /*
-                 * 動かすのは**字幕の文字**だけ。字幕のオン・オフの**ボタン**まで真ん中へ動かしてしまったので、
-                 * 押せるもの（ボタン・リンク）と、名前に button が入るもの、幅の狭いものは対象にしない（2026-09-16 実機）
-                 */
-                if (el.closest('button, a, [role="button"], [class*="button" i]')) continue;
-                const text = (el.textContent || '').trim();
-                if (!text) continue;                        // 字幕が出ていない間は何もしない
-                const box = el.getBoundingClientRect();
-                if (!(box.width >= cr.width * 0.4)) continue;   // ボタンのような小さいものは字幕ではない
-                const sig = `${Math.round(cr.left)}|${Math.round(cr.width)}|${top}|${font}`;
-                if (el.dataset.wpCap === sig) continue;     // 同じ置き場所なら触らない（毎秒書き換えるとちらつく）
-                el.style.setProperty('position', 'fixed', 'important');
-                el.style.setProperty('left', `${Math.round(cr.left)}px`, 'important');
-                el.style.setProperty('width', `${Math.round(cr.width)}px`, 'important');
-                el.style.setProperty('top', `${top}px`, 'important');
-                el.style.setProperty('height', 'auto', 'important');
-                // 元の指定（bottom / right）が残っていると、上下に引き伸ばされて巨大な箱になる（2026-09-16）
-                el.style.setProperty('bottom', 'auto', 'important');
-                el.style.setProperty('right', 'auto', 'important');
-                el.style.setProperty('transform', 'translateY(-50%)', 'important');
-                el.style.setProperty('font-size', `${font}px`, 'important');
-                el.style.setProperty('line-height', '1.35', 'important');
-                el.style.setProperty('text-align', 'center', 'important');
-                el.style.setProperty('margin', '0', 'important');
-                el.dataset.wpCap = sig;
-                captionMoved.add(el);
-            }
-        }
-        function resetCaptions() {
-            for (const el of captionMoved) {
-                for (const p of CAPTION_PROPS) el.style.removeProperty(p);
-                delete el.dataset.wpCap;
-            }
-            captionMoved.clear();
-        }
 
         function tidyAround(video) {
             if (!video) {
