@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.20
+// @version      0.24.21
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.20";
+    const __WP_VERSION__ = "0.24.21";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -812,6 +812,8 @@ const WP_SHIM = (() => {
             const input = q('input');
             for (const type of ['focus', 'blur']) {
                 input.addEventListener(type, () => {
+                    // キーボードがせり上がる／下りる間、画面の更新に合わせて置き直す（ちらつきを減らす）
+                    followKeyboard();
                     for (const ms of [60, 400, 900]) setTimeout(() => { placePanel(); keepLatest(); }, ms);
                 });
             }
@@ -955,6 +957,10 @@ const WP_SHIM = (() => {
         const GUEST_HIDE = /再生|一時停止|停止|早送り|巻き戻し|\d+\s*秒(進|戻)|次の(エピソード|話)|前の(エピソード|話)|スキップ|Play\b|Pause|Forward|Rewind|Next\s*(episode|up)|Skip/i;
         const GUEST_KEEP = /字幕|音声|吹き替え|音量|ミュート|全画面|フルスクリーン|設定|Subtitle|Caption|Audio|Volume|Mute|Fullscreen|Settings/i;
         const guestHidden = new Set();
+        // シークバー（動かせなくするだけ。隠さない）。Prime は progress/seek、Netflix は scrubber/timeline の名前を使う
+        const GUEST_LOCK_SEL = 'input[type="range"], [role="slider"], [class*="seek" i], [class*="scrub" i], ' +
+            '[class*="progress" i], [class*="timeline" i], [data-uia*="timeline" i], [data-uia*="scrubber" i]';
+        const guestLocked = new Set();
         let startedOnce = false;
         function hideGuestControls(video) {
             if (IS_DESKTOP) return;
@@ -962,6 +968,8 @@ const WP_SHIM = (() => {
                 if (!video) {
                     for (const el of guestHidden) { el.style.removeProperty('visibility'); el.style.removeProperty('pointer-events'); }
                     guestHidden.clear();
+                    for (const el of guestLocked) el.style.removeProperty('pointer-events');
+                    guestLocked.clear();
                 }
                 return;
             }
@@ -973,6 +981,16 @@ const WP_SHIM = (() => {
                 el.style.setProperty('visibility', 'hidden', 'important');
                 el.style.setProperty('pointer-events', 'none', 'important');
                 guestHidden.add(el);
+            }
+            /*
+             * シークバー（再生位置のバー）は、見えるけれど**動かせない**ようにする（2026-09-16 ユーザー要望）。
+             * ゲストが動かしても、こちらがホストの位置へ戻すだけで意味がなく、そのたびにずれて読み込み直しになる。
+             * 今どこを再生しているかは見えたほうがよいので、隠さずに触れなくする
+             */
+            for (const el of frame.querySelectorAll(GUEST_LOCK_SEL)) {
+                if (guestLocked.has(el)) continue;
+                el.style.setProperty('pointer-events', 'none', 'important');
+                guestLocked.add(el);
             }
         }
 
@@ -995,7 +1013,11 @@ const WP_SHIM = (() => {
             }
             const cr = contentRect(video);
             if (!(cr.width > 0)) return;
-            const font = Math.max(13, Math.min(20, Math.round(cr.width * 0.045)));
+            /*
+             * 文字の大きさは映像の幅から決める。Android は同じ計算でも大きく見える（実機の指摘）ので、少し控えめにする。
+             * iPhone はブラウザが描く字幕（::cue）で、ここの指定がそのまま効く
+             */
+            const font = Math.max(12, Math.min(20, Math.round(cr.width * (IS_ANDROID ? 0.036 : 0.045))));
             if (captionStyleEl && captionStyleEl.isConnected && captionStyleEl.dataset.wpFont === String(font)) return;
             if (!captionStyleEl) {
                 captionStyleEl = document.createElement('style');
@@ -1269,8 +1291,29 @@ const WP_SHIM = (() => {
             });
         }
         if (PAGE_SERVICE === 'prime') setInterval(reportAds, 1000);
-        globalThis.visualViewport?.addEventListener('resize', placePanel);
-        globalThis.visualViewport?.addEventListener('scroll', placePanel);
+        /*
+         * キーボードが出入りしている間だけ、画面の更新に合わせて（毎フレーム）置き直す（2026-09-16 ユーザー要望）。
+         * iPhone のキーボードは 0.3 秒ほどかけてせり上がり、その間ずっと画面がずれ続けるので、
+         * 知らせが来たときだけ直していると、追いつくまでの一瞬ちらつく。
+         * **ずっと毎フレーム動かすと重く、本物の Prime でゲストが数秒遅れた**ので、動き終わるまで（最大 0.8 秒）に限る
+         */
+        let followUntil = 0;
+        let following = false;
+        let lastShift = -1;
+        function followKeyboard() {
+            followUntil = Date.now() + 800;
+            if (following) return;
+            following = true;
+            const step = () => {
+                const shift = keyboardShift();
+                if (shift !== lastShift) { lastShift = shift; placePanel(); }
+                if (Date.now() < followUntil) requestAnimationFrame(step);
+                else following = false;
+            };
+            requestAnimationFrame(step);
+        }
+        globalThis.visualViewport?.addEventListener('resize', () => { placePanel(); followKeyboard(); });
+        globalThis.visualViewport?.addEventListener('scroll', () => { placePanel(); followKeyboard(); });
         window.addEventListener('resize', placePanel);
         window.addEventListener('orientationchange', () => setTimeout(placePanel, 300));
         // プレイヤーの大きさはページの作りで後から変わるので、開いている間はときどき測り直す
