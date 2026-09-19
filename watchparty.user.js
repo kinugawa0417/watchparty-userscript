@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Watch Party（Prime を自動で合わせる）
+// @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.23
-// @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
+// @version      1.0.0
+// @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
 // @match        https://www.netflix.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.23";
+    const __WP_VERSION__ = "1.0.0";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -734,7 +734,7 @@ const WP_SHIM = (() => {
             </style>
             <div class="safe" aria-hidden="true"></div>
             <div class="status">
-                <div class="pill"><span class="dot"></span><span class="text">Watch Party</span></div>
+                <div class="pill"><span class="dot"></span><span class="text">KINUGAWA Party Theater</span></div>
             </div>
             <!-- 映像の真ん中に大きく出す（2026-09-14 Android エミュレーター: Amazon のスマホ向けプレイヤーは人が触るまで再生しない。左下の小さいボタンでは気づきにくかった） -->
             <button class="tap" hidden>▶ タップして再生</button>
@@ -1533,7 +1533,7 @@ const WP_SHIM = (() => {
         function render() {
             q('.dot').className = 'dot' + (connected ? ' on' : '');
             q('.text').textContent =
-                !connected ? 'Watch Party つないでいます…'
+                !connected ? 'KINUGAWA Party Theater つないでいます…'
                 : !hasHost ? 'ホストの接続が切れました（戻るまで、このまま再生します）'
                 : hostHold ? 'ホストが次の作品を選んでいます'
                 : otherVideo ? 'ホストが別の作品に変えました'
