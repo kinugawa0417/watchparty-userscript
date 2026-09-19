@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Party（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      0.24.22
+// @version      0.24.23
 // @description  友達と一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。Watch Party の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "0.24.22";
+    const __WP_VERSION__ = "0.24.23";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1541,8 +1541,12 @@ const WP_SHIM = (() => {
                 : hostAd ? 'ホストの広告が終わるのを待っています'
                 : hostEvent && Date.now() < hostEvent.until ? hostEvent.text
                 : hostRef && !hostPlaying && playerReady ? '⏸ ホストが一時停止しています'
+                /*
+                 * 2026-09-16 ユーザー要望: 「再生ボタンを押してください」より「入り直してください」のほうが確実。
+                 * 動画を掴めないときは、その場で押しても直らないことが多く、招待ページから開き直すと直る
+                 */
                 : !playerReady ? (Date.now() - openedAt > 10000
-                    ? '動画が始まらないときは、画面の再生ボタンを押してください' : '動画が始まるのを待っています')
+                    ? '動画が始まらないときは、招待ページから開き直してください' : '動画が始まるのを待っています')
                 // 広告の入った動画で、まだ画面の時間表示で答え合わせできていない（操作ボタンを出してもらうと読める。2026-09-14）
                 : needsClock() ? (IS_DESKTOP ? '合わせています。マウスを画面の上で動かしてください（広告の時間を確かめます）'
                     : '合わせています。画面を1回タップしてください（広告の時間を確かめます）')
