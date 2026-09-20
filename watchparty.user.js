@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.3
+// @version      1.0.4
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.3";
+    const __WP_VERSION__ = "1.0.4";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -903,7 +903,8 @@ const WP_SHIM = (() => {
              * スマホでは**キーボードの出し入れ（visualViewport）では計算し直さない**。上が最新・入力欄も上なので、
              * 下がキーボードで隠れても困らない。画面の向きや映像の大きさが変わったときだけ置き直す
              */
-            const vv = IS_DESKTOP ? globalThis.visualViewport : null;
+            // Android はキーボードで高さが縮むので、その変化でも置き直す（placePanel と条件を揃える）
+            const vv = (IS_DESKTOP || IS_ANDROID) ? globalThis.visualViewport : null;
             const r = video ? video.getBoundingClientRect() : null;
             const sig = [window.innerWidth, window.innerHeight, vv ? Math.round(vv.height) : 0, vv ? Math.round(vv.offsetTop) : 0,
                 keyboardShift(),   // キーボードで画面がずれたら置き直す（見た目を変えないため）
@@ -1134,7 +1135,12 @@ const WP_SHIM = (() => {
              * 見えている範囲（visualViewport）ではなく、画面そのもの（window）で置く。
              * 上が最新・入力欄も上なので、下がキーボードで隠れても困らない
              */
-            const vv = IS_DESKTOP ? globalThis.visualViewport : null;
+            /*
+             * **Android はキーボードで見えている高さ（visualViewport.height）が縮む**ので、それに合わせる
+             * （2026-09-20 実機: 合わせないとチャット欄がキーボードの下に隠れて、打っている字が見えなかった）。
+             * iPhone は縮まずページごと上へずれる（offsetTop）ので、上の決まりどおり位置を変えない。
+             */
+            const vv = (IS_DESKTOP || IS_ANDROID) ? globalThis.visualViewport : null;
             const viewH = vv ? vv.height : window.innerHeight;
             const viewTop = vv ? vv.offsetTop : 0;
             // スマホ: キーボードで画面がずれた分。その分だけ下げて、見た目の位置を変えない
