@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.4
+// @version      1.0.5
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.4";
+    const __WP_VERSION__ = "1.0.5";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1136,11 +1136,11 @@ const WP_SHIM = (() => {
              * 上が最新・入力欄も上なので、下がキーボードで隠れても困らない
              */
             /*
-             * **Android はキーボードで見えている高さ（visualViewport.height）が縮む**ので、それに合わせる
-             * （2026-09-20 実機: 合わせないとチャット欄がキーボードの下に隠れて、打っている字が見えなかった）。
-             * iPhone は縮まずページごと上へずれる（offsetTop）ので、上の決まりどおり位置を変えない。
+             * **Firefox Android はキーボードが出ても visualViewport が縮まない**（2026-09-20 実機:
+             * ih=767 に対し vvh=801 と、むしろ増えた）。高さから逆算できないので、ここでは使わず、
+             * 打っている間だけ下の「compose」で別に置く。
              */
-            const vv = (IS_DESKTOP || IS_ANDROID) ? globalThis.visualViewport : null;
+            const vv = IS_DESKTOP ? globalThis.visualViewport : null;
             const viewH = vv ? vv.height : window.innerHeight;
             const viewTop = vv ? vv.offsetTop : 0;
             // スマホ: キーボードで画面がずれた分。その分だけ下げて、見た目の位置を変えない
@@ -1157,7 +1157,21 @@ const WP_SHIM = (() => {
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
-            if (IS_DESKTOP && window.innerWidth >= 700) {
+            if (IS_ANDROID && composing) {
+                /*
+                 * **打っている間だけ、映像に重ねて画面の上半分へ出す**（2026-09-20 実機）。
+                 * Firefox Android はキーボードでビューポートが縮まないので高さを測れず、
+                 * 映像が画面の6割を占めていると、その下に置いたチャット欄がキーボードの下に隠れてしまう。
+                 * 映像は打ち終われば元どおり見えるので、打っている間だけ重ねる。
+                 * **映像そのものには触らない**（触ると保護された動画が再生できなくなる）。
+                 */
+                panel.style.top = `${Math.round(window.innerHeight * 0.08)}px`;
+                panel.style.bottom = 'auto';
+                panel.style.height = `${Math.round(window.innerHeight * 0.46)}px`;
+                panel.dataset.place = 'overlay';   // 見た目の決まりは overlay と同じものを使う
+                panel.dataset.tight = '';
+                panel.style.left = ''; panel.style.width = '';
+            } else if (IS_DESKTOP && window.innerWidth >= 700) {
                 /*
                  * PC の横長の画面では、チャット欄を右側に縦長で置く（2026-09-14）。下に重ねると映像と操作ボタンを隠すため。
                  * 上はプレイヤーの戻るボタン、下は再生バーと重ならないよう、少し空ける
@@ -1437,6 +1451,14 @@ const WP_SHIM = (() => {
             input.value = '';
             stickLatest = true;
             keepLatest();
+        }
+
+        /*
+         * 打ち始め・打ち終わりで置き直す（2026-09-20）。Android は打っている間だけ置き場所が変わるので、
+         * フォーカスの出入りで呼ばないと切り替わらない。少し待つのは、キーボードが出きってから測るため
+         */
+        for (const type of ['focus', 'blur']) {
+            q('input').addEventListener(type, () => setTimeout(() => placePanel(true), 60));
         });
 
         // --- 再生が止められたとき ------------------------------------------------
