@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.9
+// @version      1.0.10
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.9";
+    const __WP_VERSION__ = "1.0.10";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -911,13 +911,19 @@ const WP_SHIM = (() => {
              * （2026-09-20 に実際に止めた）ので、毎秒のこの点検に混ぜるだけにしてある
              */
             const composingNow = !IS_DESKTOP && root.activeElement === q('input');
-            const sig = [window.innerWidth, window.innerHeight, vv ? Math.round(vv.height) : 0, vv ? Math.round(vv.offsetTop) : 0,
+            const baseSig = [window.innerWidth, window.innerHeight, vv ? Math.round(vv.height) : 0, vv ? Math.round(vv.offsetTop) : 0,
                 keyboardShift(),   // キーボードで画面がずれたら置き直す（見た目を変えないため）
-                r ? Math.round(r.top) : -1, r ? Math.round(r.height) : -1, video ? video.videoHeight : 0, open,
-                composingNow].join('|');
+                r ? Math.round(r.top) : -1, r ? Math.round(r.height) : -1, video ? video.videoHeight : 0, open].join('|');
+            const sig = `${baseSig}|${composingNow}`;
             if (sig !== lastLayoutSig) {
+                /*
+                 * **打っているかだけが変わったときは、映像に触らない**（panelOnly）。
+                 * 触るとプレイヤーが描き直し・読み込み直しをして再生が乱れる
+                 * （2026-09-20 実機: iPhone が1分遅れた。2026-09-14 にも3〜4秒の遅れを実測している）
+                 */
+                const onlyComposing = lastLayoutSig.startsWith(`${baseSig}|`);
                 lastLayoutSig = sig;
-                placePanel();
+                placePanel(onlyComposing);
             }
         }
 
