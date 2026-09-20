@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.2
+// @version      1.0.3
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.2";
+    const __WP_VERSION__ = "1.0.3";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1438,21 +1438,10 @@ const WP_SHIM = (() => {
         // ホストは再生中なのにこちらが止まったままなら、タップしてもらう
         let blockedSince = 0;
         q('.tap').addEventListener('click', () => {
-            /*
-             * **位置を合わせてから再生する**（2026-09-20 Android 実機）。
-             * play() だけを呼ぶと、データの無い位置（readyState 0）で待つだけになり「くるくる」のまま始まらなかった。
-             * ホストが一時停止→再生すると直ったのは、そのとき seek が入って読み込みが始まったから。同じことをここでもやる。
-             */
-            touched = true;   // 人が触った＝再生の許可が出たので、これ以降は APPLY を送ってよい
-            blockedSince = 0;
-            if (hostRef) {
-                const t = hostRef.t + (hostPlaying ? (Date.now() - hostRef.at) / 1000 : 0);
-                toBridge('APPLY', { type: 'seek', currentTime: t, timestamp: Date.now() });
-                toBridge('APPLY', { type: hostPlaying ? 'play' : 'pause', currentTime: t, timestamp: Date.now() });
-            }
             const v = mainVideo();
             if (v) v.play().catch(() => {});
             socket.emit('request-sync');
+            blockedSince = 0;
             render();
         });
         setInterval(() => {
