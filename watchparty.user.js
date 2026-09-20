@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.0
+// @version      1.0.1
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.0";
+    const __WP_VERSION__ = "1.0.1";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1639,7 +1639,13 @@ const WP_SHIM = (() => {
         const frame = playerFrame(video);
         const vw = video.videoWidth, vh = video.videoHeight;
         const box = video.getBoundingClientRect();
-        if (!portrait || IS_DESKTOP || !vw || !vh || !(box.width > 0)) { resetPlayerFit(video, frame); return; }
+        /*
+         * **Android では箱を縮めず、translate も掛けない**（2026-09-20 に戻した）。
+         * 2026-09-14 に「Android では映像やその外枠に触ると、保護された動画が再生できなくなる」と実機で3回
+         * 確かめて v0.21.1 で除外したのに、2026-09-16 に「箱を縮める」作りへ直したとき**この除外が外れていた**。
+         * その結果、Android で動画の中身が空のまま（d=NaN rs=0）再生が始まらなくなった。
+         */
+        if (!portrait || IS_DESKTOP || IS_ANDROID || !vw || !vh || !(box.width > 0)) { resetPlayerFit(video, frame); return; }
 
         // 映像の縦横比から、この幅での高さを出す（画面より高くはしない）
         const want = Math.min(Math.round(box.width * vh / vw), Math.round(window.innerHeight * 0.75));
