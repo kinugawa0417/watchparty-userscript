@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.7
+// @version      1.0.8
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.7";
+    const __WP_VERSION__ = "1.0.8";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1163,21 +1163,7 @@ const WP_SHIM = (() => {
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
-            if (IS_ANDROID && composing && r && r.height > 0) {
-                /*
-                 * **打っている間だけ、映像に重ねて画面の上の方へ出す**（2026-09-20 実機）。
-                 * Firefox Android はキーボードが出てもビューポートが縮まない（ih=767 に対し vvh=801 だった）ので、
-                 * キーボードの高さを測れない。映像が画面の6割を占めると、その下に置いたチャット欄が
-                 * キーボードの下に隠れて、打っている字も相手の発言も見えなかった。
-                 * 映像そのものには触らない（触ると保護された動画が再生できなくなる）。打ち終われば元の位置に戻る。
-                 */
-                panel.style.top = `${Math.round(window.innerHeight * 0.06)}px`;
-                panel.style.bottom = 'auto';
-                panel.style.height = `${Math.round(window.innerHeight * 0.48)}px`;
-                panel.dataset.place = 'overlay';
-                panel.dataset.tight = '';
-                panel.style.left = ''; panel.style.width = '';
-            } else if (IS_DESKTOP && window.innerWidth >= 700) {
+            if (IS_DESKTOP && window.innerWidth >= 700) {
                 /*
                  * PC の横長の画面では、チャット欄を右側に縦長で置く（2026-09-14）。下に重ねると映像と操作ボタンを隠すため。
                  * 上はプレイヤーの戻るボタン、下は再生バーと重ならないよう、少し空ける
@@ -1456,6 +1442,26 @@ const WP_SHIM = (() => {
             socket.emit('send-message', { message: text });
             input.value = '';
             stickLatest = true;
+            /*
+             * **打っている間は、入力フォームだけをキーボードの上へ浮かせる**（2026-09-20 ユーザー要望・実機）。
+             * チャット欄そのものは下のままでよく、隠れても困らない。**映像は隠してはいけない。**
+             * Firefox Android はキーボードが出てもビューポートが縮まない（ih=767 に対し vvh=801）ので
+             * 高さを測れない。実機の写真で測るとキーボードは画面の3割半ほどだったので、4割の位置に置いて余裕を見る。
+             */
+            const form = q('form');
+            if (form) {
+                if (IS_ANDROID && composing) {
+                    form.style.position = 'fixed';
+                    form.style.left = '8px';
+                    form.style.right = '8px';
+                    form.style.bottom = `${Math.round(window.innerHeight * 0.4)}px`;
+                    form.style.zIndex = '10';
+                } else {
+                    form.style.position = '';
+                    form.style.left = ''; form.style.right = '';
+                    form.style.bottom = ''; form.style.zIndex = '';
+                }
+            }
             keepLatest();
         }
 
