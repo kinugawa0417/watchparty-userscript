@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.10
+// @version      1.0.11
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.10";
+    const __WP_VERSION__ = "1.0.11";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1595,20 +1595,37 @@ const WP_SHIM = (() => {
             q('.hstate').textContent = q('.text').textContent;
             q('.hstate').style.color = connected && hasHost && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
+            /*
+             * **動画をまだ掴めていない間は、真ん中に「そのまま待って」と出す**（2026-09-21 ユーザー要望）。
+             * 左下に小さく「動画が始まるのを待っています」と出していたが、作品ページでは気づかず、
+             * 「続きを観る」などのボタンを押してしまっていた。
+             */
+            const waitingPlayer = connected && hasHost && !otherVideo && !hostHold && !playerReady && q('.tap').hidden;
             const clock = connected && hasHost && !otherVideo && !hostHold && playerReady && needsClock() && !clockDismissed && q('.tap').hidden;
-            if (clock && q('.clock:not(.adwait)').hidden) {
-                q('.clock:not(.adwait)').textContent = IS_DESKTOP ? '🖱 マウスを画面の上で動かしてください' : '👆 画面を1回タップしてください';
+            const center = q('.clock:not(.adwait)');
+            // 出す中身が切り替わったときだけ書き換える（毎秒書き換えると、字が一瞬消えてちらつく）
+            const centerKind = waitingPlayer ? 'wait' : clock ? 'gesture' : '';
+            if (centerKind && center.dataset.kind !== centerKind) {
+                center.dataset.kind = centerKind;
                 const note = document.createElement('small');
-                note.textContent = '広告の時間を確かめて、ホストにぴったり合わせます（動かすと消えます）';
-                if (!IS_DESKTOP) note.textContent = '広告の時間を確かめて、ホストにぴったり合わせます（タップすると消えます）';
-                q('.clock:not(.adwait)').appendChild(note);
-                clockShownAt = Date.now();
+                if (centerKind === 'wait') {
+                    center.textContent = '▶ 再生が始まるまで、何もせずにお待ちください';
+                    note.textContent = '自動で始まります。ボタンは押さなくて大丈夫です';
+                } else {
+                    center.textContent = IS_DESKTOP ? '🖱 マウスを画面の上で動かしてください' : '👆 画面を1回タップしてください';
+                    note.textContent = IS_DESKTOP
+                        ? '広告の時間を確かめて、ホストにぴったり合わせます（動かすと消えます）'
+                        : '広告の時間を確かめて、ホストにぴったり合わせます（タップすると消えます）';
+                    clockShownAt = Date.now();   // 「1回タップ」の方だけ、出してからの時間を数える
+                }
+                center.appendChild(note);
             }
-            q('.clock:not(.adwait)').hidden = !clock;
-            if (clock) {
+            if (!centerKind) center.dataset.kind = '';
+            center.hidden = !centerKind;
+            if (centerKind) {
                 const cv = layoutVideo();
                 const cr = cv ? contentRect(cv) : null;
-                q('.clock:not(.adwait)').style.top = cr && cr.height > 0 ? `${Math.round(cr.top + cr.height / 2)}px` : '40%';
+                center.style.top = cr && cr.height > 0 ? `${Math.round(cr.top + cr.height / 2)}px` : '40%';
             }
             if (!q('.tap').hidden) {
                 // 見えている映像の真ん中へ（映像が見つからなければ画面の少し上）
@@ -1696,6 +1713,11 @@ const WP_SHIM = (() => {
             // 縮める前の高さを覚えておく（プレイヤーの層かどうかの見分けに使う。tidyAround）
             if (!video.dataset.wpFitFrom) video.dataset.wpFitFrom = String(Math.round(box.height));
             frame.style.setProperty('height', `${want}px`, 'important');
+            /*
+             * 箱を縮めると、その中に描かれるプレイヤーのメニュー（字幕・音声の設定）が下で切れる
+             * （2026-09-21 Android 実機）。はみ出しても描けるようにする
+             */
+            frame.style.setProperty('overflow', 'visible', 'important');
             if (frame !== video) video.style.setProperty('height', '100%', 'important');
             video.dataset.wpFit = String(want);
         }
@@ -1713,6 +1735,7 @@ const WP_SHIM = (() => {
     function resetPlayerFit(video, frame = playerFrame(video)) {
         if (video.dataset.wpFit) {
             frame.style.removeProperty('height');
+            frame.style.removeProperty('overflow');
             if (frame !== video) video.style.removeProperty('height');
             delete video.dataset.wpFit;
             delete video.dataset.wpFitFrom;
