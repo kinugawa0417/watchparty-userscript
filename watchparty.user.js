@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.13
+// @version      1.0.14
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.13";
+    const __WP_VERSION__ = "1.0.14";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -440,6 +440,12 @@ const WP_SHIM = (() => {
         const TROUBLE_SHOW_MS = recentFix ? 10000 : 20000;
         const DRIFT_SHOW_SEC = 8;
         let contentT = null;
+        let contentTAt = 0;
+        /** 秒を「1分12秒」の形にする（広告で遅れているぶんの表示に使う） */
+        const fmtLag = (s) => {
+            const n = Math.max(0, Math.round(s));
+            return n >= 60 ? `${Math.floor(n / 60)}分${n % 60}秒` : `${n}秒`;
+        };
 
         /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
         function sameTitle(v) {
@@ -616,6 +622,7 @@ const WP_SHIM = (() => {
                 render();
             } else if (d.type === 'PLAYER_EVENT' && d.payload && typeof d.payload.currentTime === 'number') {
                 contentT = d.payload.currentTime;   // 記録用（広告を除いた本編の時間）。サーバーへは送らない
+                contentTAt = Date.now();            // 古い値で「遅れている」と誤って出さないため、受け取った時刻も持つ
             }
             // INFO / PLAYER_EVENT / DIAG / META は送らない（見ている側なので）
         });
@@ -1572,6 +1579,26 @@ const WP_SHIM = (() => {
 
         function render() {
             q('.dot').className = 'dot' + (connected ? ' on' : '');
+            /*
+             * **広告のぶん遅れて見ている間は、それが分かるように出す**（2026-09-21 ユーザー要望）。
+             * ゲストの広告が明けてもホストへは追いつかない（追いつくには広告のぶんを飛ばすことになり、
+             * 映画だと話が分からなくなる）。合わせたい人は、シークバーを動かすか開き直してもらう。
+             */
+            const hostNow = hostRef ? hostRef.t + (hostPlaying ? (Date.now() - hostRef.at) / 1000 : 0) : null;
+            /*
+             * 自分の本編時間は、**届いたばかりのものだけ**を使う（2026-09-21）。
+             * 古い値のままだと、ホストが先へ飛んだ直後に「20分遅れています」と誤って出た。
+             */
+            const myFresh = contentT !== null && Date.now() - contentTAt < 3000;
+            /*
+             * **出すのは「広告ぶんとして有り得る遅れ」だけ**（8秒〜5分）。
+             * 本編の時間は広告の換算を通すので、ホストが大きく飛んだ直後などに古い値が残り、
+             * 「20分遅れています」と誤って出た（2026-09-21 テスト）。広告は長くても数分なので、そこで切る。
+             */
+            const lag = (hostNow !== null && myFresh) ? hostNow - contentT : null;
+            const adLagSec = (lag !== null && hostPlaying && playerReady
+                && !selfAd && !hostAd && !otherVideo && !hostHold
+                && lag >= DRIFT_SHOW_SEC && lag <= 300) ? lag : null;
             q('.text').textContent =
                 !connected ? 'KINUGAWA Party Theater つないでいます…'
                 : !hasHost ? 'ホストの接続が切れました（戻るまで、このまま再生します）'
@@ -1590,6 +1617,7 @@ const WP_SHIM = (() => {
                 // 広告の入った動画で、まだ画面の時間表示で答え合わせできていない（操作ボタンを出してもらうと読める。2026-09-14）
                 : needsClock() ? (IS_DESKTOP ? '合わせています。マウスを画面の上で動かしてください（広告の時間を確かめます）'
                     : '合わせています。画面を1回タップしてください（広告の時間を確かめます）')
+                : adLagSec !== null ? `⏱ 広告のぶん遅れて視聴中（${fmtLag(adLagSec)}）`
                 : 'ホストに自動で合わせています';
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
