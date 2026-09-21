@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.11
+// @version      1.0.12
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -29,7 +29,7 @@
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.11";
+    const __WP_VERSION__ = "1.0.12";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1610,7 +1610,8 @@ const WP_SHIM = (() => {
                 const note = document.createElement('small');
                 if (centerKind === 'wait') {
                     center.textContent = '▶ 再生が始まるまで、何もせずにお待ちください';
-                    note.textContent = '自動で始まります。ボタンは押さなくて大丈夫です';
+                    note.textContent = '自動でプレイヤーが起動します。ボタンは押さなくて大丈夫です。'
+                        + '開かない場合は、招待ページから開きなおしてください';
                 } else {
                     center.textContent = IS_DESKTOP ? '🖱 マウスを画面の上で動かしてください' : '👆 画面を1回タップしてください';
                     note.textContent = IS_DESKTOP
