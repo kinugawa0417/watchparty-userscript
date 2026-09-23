@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（テスト）
 // @namespace    watchparty-fixed-stg
-// @version      1.0.15
+// @version      1.0.16
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -31,7 +31,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = "watchparty-hub-stg.pages.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.15";
+    const __WP_VERSION__ = "1.0.16";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -695,23 +695,10 @@ const WP_SHIM = (() => {
                 .badge { display: inline-block; min-width: 20px; padding: 2px 6px; margin-left: 6px; border-radius: 10px;
                          background: #e5484d; font-size: 12px; }
                 /*
-                 * **音量のボタン**（2026-09-23 ユーザー要望）。Prime のプレイヤーの音声ボタンは、縦画面だと
-                 * 箱の下で切れて押せない（箱の高さを変えると同期が19.6秒ずれた＝README の既知の制約）。
-                 * そこで自前で出す。押すと −／＋／ミュート解除が出る。チャットのボタンの上に置く
+                 * **音量のボタンは置かない**（2026-09-23 ユーザー判断）。
+                 * 「▶ 再生をはじめる」で消音を解いて 100% にすれば、あとは**端末の物理ボタン**で調整できる。
+                 * 一度は自前の 🔊 を出したが、画面に常駐するボタンが増えるだけなので取り止めた。
                  */
-                .vol { position: fixed; right: 12px; bottom: calc(68px + env(safe-area-inset-bottom, 0px));
-                       pointer-events: auto; border: 0; border-radius: 999px; min-width: 48px; min-height: 44px;
-                       padding: 8px 12px; font: 700 18px/1 -apple-system, system-ui, sans-serif;
-                       color: #fff; background: rgba(30,30,38,.92); box-shadow: 0 2px 10px rgba(0,0,0,.4); z-index: 2; }
-                .vol.off { background: rgba(229,72,77,.95); }
-                .volbar { position: fixed; right: 12px; bottom: calc(68px + env(safe-area-inset-bottom, 0px)); z-index: 3;
-                          pointer-events: auto; display: flex; align-items: center; gap: 6px; padding: 6px;
-                          background: rgba(15,15,19,.95); border: 1px solid #2c2c36; border-radius: 999px;
-                          box-shadow: 0 2px 10px rgba(0,0,0,.5); }
-                .volbar button { border: 0; border-radius: 999px; min-width: 44px; min-height: 40px; cursor: pointer;
-                                 font: 700 17px/1 -apple-system, system-ui, sans-serif; color: #fff; background: #3a6df0; }
-                .volbar .vclose { background: transparent; color: #9a9aa6; min-width: 34px; font-size: 15px; }
-                .volbar .vnum { color: #f2f2f4; font: 700 14px/1 -apple-system, system-ui, sans-serif; min-width: 40px; text-align: center; }
                 .panel { position: fixed; z-index: 4; right: 8px; left: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px));
                          max-width: 420px; margin-left: auto; height: min(52vh, 420px);
                          pointer-events: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px;
@@ -803,13 +790,6 @@ const WP_SHIM = (() => {
                 <button class="update" hidden></button>
             </div>
             <a class="other" hidden></a>
-            <button class="vol" hidden aria-label="音量">🔊</button>
-            <div class="volbar" hidden>
-                <button class="vdown" type="button" aria-label="音量を下げる">−</button>
-                <span class="vnum">100%</span>
-                <button class="vup" type="button" aria-label="音量を上げる">＋</button>
-                <button class="vclose" type="button" aria-label="閉じる">✕</button>
-            </div>
             <button class="fab">💬<span class="badge" hidden></span></button>
             <div class="panel" hidden>
                 <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="refix" title="再生がおかしいときに立て直す" aria-label="再生を立て直す">🔄</button><button class="pop" title="チャットを別の窓で開く" aria-label="チャットを別の窓で開く" hidden>⧉</button><button class="close" aria-label="閉じる">✕</button></div>
@@ -1557,11 +1537,10 @@ const WP_SHIM = (() => {
          */
         const VOL_HOLD_MS = 30000;      // 押したあと、これだけの間は音量を最大に保つ（プレイヤーが読み込み直して戻すため）
         const GATE_ESCAPE_MS = 25000;   // これだけ待っても始まらなければ、Amazon の画面を見る逃げ道を出す
+        const FULL_VOLUME = 1;          // 目指す音量。**ここから下げる手段は出さない**（端末の物理ボタンで調整する）
         let gatePassed = false;         // 「▶ 再生をはじめる」を押した
         let gateShownAt = Date.now();
         let volumeHoldUntil = 0;
-        let wantVolume = 1;             // 目指す音量（自前のボタンで変える）
-        let volBarUntil = 0;
 
         /** 音を出せる状態にする（人が触ったあとに呼ぶこと。触る前に呼んでも効かない） */
         function applyVolume(force = false) {
@@ -1570,7 +1549,7 @@ const WP_SHIM = (() => {
                 if (!Number.isFinite(v.duration) || v.duration < 300) continue;   // 予告などの短い動画は触らない
                 try {
                     if (force || v.muted) v.muted = false;
-                    if (force || v.volume < wantVolume - 0.01) v.volume = wantVolume;
+                    if (force || v.volume < FULL_VOLUME - 0.01) v.volume = FULL_VOLUME;
                     done = true;
                 } catch { /* プレイヤーが受け付けないことがある */ }
             }
@@ -1639,24 +1618,6 @@ const WP_SHIM = (() => {
             // 「Amazon の画面を見る」（ログインやプロフィール選びが隠れているとき用）
             if (e.target && e.target.classList.contains('gescape')) { gatePassed = true; q('.gate').hidden = true; render(); }
         });
-
-        // --- 音量のボタン ---------------------------------------------------------
-        const showVolBar = (on) => {
-            volBarUntil = on ? Date.now() + 6000 : 0;
-            q('.volbar').hidden = !on;
-            q('.vol').hidden = on || !gatePassed;
-        };
-        const setVolume = (next) => {
-            wantVolume = Math.max(0, Math.min(1, Math.round(next * 10) / 10));
-            volumeHoldUntil = Date.now() + VOL_HOLD_MS;
-            applyVolume(true);
-            q('.vnum').textContent = `${Math.round(wantVolume * 100)}%`;
-            volBarUntil = Date.now() + 6000;
-        };
-        q('.vol').addEventListener('click', () => { setVolume(wantVolume); showVolBar(true); });
-        q('.vup').addEventListener('click', () => setVolume(wantVolume + 0.1));
-        q('.vdown').addEventListener('click', () => setVolume(wantVolume - 0.1));
-        q('.vclose').addEventListener('click', () => showVolBar(false));
 
         // --- 再生が止められたとき ------------------------------------------------
         // iPhone は、人が触っていないと動画を再生できないことがある。
@@ -1921,18 +1882,14 @@ const WP_SHIM = (() => {
 
             /*
              * 押したあとしばらくは音量を最大に保つ。Prime は読み込み直すたびに音量を戻すので、
-             * 1回入れただけでは消音に戻ることがある。ずっと張り付くと人が下げた音量を戻してしまうので、
-             * 保つのは押してから 30 秒だけ（そのあとは自前のボタンで変えられる）
+             * 1回入れただけでは消音に戻ることがある。
+             * **保つのは押してから 30 秒だけ**。ずっと張り付くと、見ている人が Prime 側で下げた音量を
+             * こちらが戻し続けてしまう。そのあとの調整は**端末の物理ボタン**で行う（2026-09-23 ユーザー判断）
              */
             const v = mainVideo();
             // 押したときにプレイヤーがまだ無いこともある。**出てくるまで待つ**（出てから 30 秒を数える）
             if (!v) volumeHoldUntil = Math.max(volumeHoldUntil, Date.now() + VOL_HOLD_MS);
             if (Date.now() < volumeHoldUntil) applyVolume();
-            if (volBarUntil && Date.now() > volBarUntil) showVolBar(false);
-            const quiet = Boolean(v) && (v.muted || v.volume < 0.05);
-            q('.vol').hidden = !q('.volbar').hidden || !v;
-            q('.vol').classList.toggle('off', quiet);
-            q('.vol').textContent = quiet ? '🔇' : '🔊';
         }
         render();
     }
