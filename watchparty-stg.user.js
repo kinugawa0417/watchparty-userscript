@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（テスト）
 // @namespace    watchparty-fixed-stg
-// @version      1.0.16
+// @version      1.0.17
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -31,7 +31,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = "watchparty-hub-stg.pages.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.16";
+    const __WP_VERSION__ = "1.0.17";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -965,10 +965,16 @@ const WP_SHIM = (() => {
                  * **打っているかだけが変わったときは、映像に触らない**（panelOnly）。
                  * 触るとプレイヤーが描き直し・読み込み直しをして再生が乱れる
                  * （2026-09-20 実機: iPhone が1分遅れた。2026-09-14 にも3〜4秒の遅れを実測している）
+                 *
+                 * **キーボードが動いている間（following）も映像に触らない**（2026-09-23 修正）。
+                 * 上の fitPlayerToVideo は `!following` で守ってあったが、こちらの placePanel は素通りで、
+                 * 中で同じ fitPlayerToVideo を呼んでいた。キーボードが動くと毎回 keyboardShift() が変わって
+                 * ここに入るので、動いている最中にプレイヤーを書き換えていた。
+                 * 映像の合わせ直しは followKeyboard が動き終わりに1回だけやる。
                  */
                 const onlyComposing = lastLayoutSig.startsWith(`${baseSig}|`);
                 lastLayoutSig = sig;
-                placePanel(onlyComposing);
+                placePanel(onlyComposing || following);
             }
         }
 
@@ -1481,9 +1487,19 @@ const WP_SHIM = (() => {
             userClosed = true;
             setOpen(false);
         });
-        // 打ち始め・打ち終わりで、チャット欄の大きさを測り直す（キーボードの出入りより先に来ることがあるので少し後にも）
+        /*
+         * 打ち始め・打ち終わりで、チャット欄の大きさを測り直す。
+         *
+         * **ここで映像に触ってはいけない**（2026-09-23 修正）。キーボードが動き始めるのと同時なので、
+         * 「動いている間はチャット欄だけ・動き終わってから1回だけ映像」（followKeyboard）の決めごとが破れる。
+         * プレイヤーの CSS を書き換えるたびに読み込み直しが起きるため、本物の Prime でゲストが3〜4秒遅れた。
+         *
+         * そこで、すぐやるのは**チャット欄だけ**（placePanel(true)）にして、映像の合わせ直しは
+         * followKeyboard に任せる。**キーボードでビューポートが縮まない端末（Firefox Android）でも大丈夫**:
+         * ずれが最初から変わらないので「落ち着いた」と判定され、250ms 後に1回だけ映像を合わせ直して終わる。
+         */
         for (const ev of ['focus', 'blur']) {
-            q('input').addEventListener(ev, () => { placePanel(); setTimeout(placePanel, 350); setTimeout(placePanel, 800); });
+            q('input').addEventListener(ev, () => { placePanel(true); followKeyboard(); });
         }
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
