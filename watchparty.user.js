@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.14
+// @version      1.0.17
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -28,8 +28,10 @@
     // bridge.js に「スマホのスクリプトの中で動いている」ことを伝える（ホストだけが要る重い処理を省く）
     const __WP_USERSCRIPT__ = true;
     const __WP_SERVER__ = "https://wp-sync-w4kqv7.fly.dev";
+    // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
+    const __WP_HUB_HOST__ = "watchparty-hub.pages.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.14";
+    const __WP_VERSION__ = "1.0.17";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -132,10 +134,12 @@ const WP_US = (() => {
     const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
     /*
      * 招待ページの版（https://<8桁>.watchparty-hub.pages.dev/ の 8 桁）。PC のゲストがチャットを別の窓で開くのに使う（2026-09-14）。
-     * アドレスの指定は誰でも作れるので、開く先はこの形（自分たちの Cloudflare Pages の版）に限る
+     * アドレスの指定は誰でも作れるので、開く先はこの形（自分たちの Cloudflare Pages の版）に限る。
+     * ドメインは組み立てのときに入る（本番は watchparty-hub、テストは watchparty-hub-stg。tools/env.js）
      */
     const HUB_ID_RE = /^[0-9a-f]{8}$/;
-    const hubUrl = (id) => (HUB_ID_RE.test(id || '') ? `https://${id}.watchparty-hub.pages.dev/` : null);
+    const HUB_HOST = __WP_HUB_HOST__;
+    const hubUrl = (id) => (HUB_ID_RE.test(id || '') ? `https://${id}.${HUB_HOST}/` : null);
 
     /** 版 a が版 b より古いか（形が違えば false） */
     function olderVersion(a, b) {
@@ -314,7 +318,8 @@ const WP_US = (() => {
 
 
     // amazon.co.jp と、Prime Video だけ契約の人の primevideo.com
-    // Netflix は試験（2026-09-14）。@name は変えないこと（Userscripts が別のスクリプトとして二重に入れてしまう）
+    // Netflix は試験（2026-09-14）。@name は変えないこと（Userscripts が別のスクリプトとして二重に入れてしまう）。
+    // テスト環境（WP_ENV=stg）だけは**わざと別の @name** にしてある。本番の版と並べて入れておけるようにするため
     if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
 
     // ---- userscript/shim.js ----
@@ -425,6 +430,7 @@ const WP_SHIM = (() => {
             setTimeout(render, HOST_EVENT_MS + 50);
         }
         let hostVideo = null;       // ホストのいまの作品（立て直すときに開き直す）
+        let people = 0;             // いま部屋にいる人数（待機画面に出す）
         let mine = null;
         let nfDiag = null;
         let troubleSince = 0;
@@ -471,6 +477,7 @@ const WP_SHIM = (() => {
         socket.on('disconnect', () => { connected = false; render(); });
         socket.on('update-participants', (list) => {
             if (!Array.isArray(list)) return;
+            people = list.length;
             const now = list.some(u => u && u.isHost === true);
             if (!now) { hostPlaying = false; hostAd = false; }
             // ホストが戻ってきたら、ホストの今の位置を取り直す
@@ -687,6 +694,11 @@ const WP_SHIM = (() => {
                        color: #fff; background: rgba(58,109,240,.95); box-shadow: 0 2px 10px rgba(0,0,0,.4); z-index: 2; }
                 .badge { display: inline-block; min-width: 20px; padding: 2px 6px; margin-left: 6px; border-radius: 10px;
                          background: #e5484d; font-size: 12px; }
+                /*
+                 * **音量のボタンは置かない**（2026-09-23 ユーザー判断）。
+                 * 「▶ 再生をはじめる」で消音を解いて 100% にすれば、あとは**端末の物理ボタン**で調整できる。
+                 * 一度は自前の 🔊 を出したが、画面に常駐するボタンが増えるだけなので取り止めた。
+                 */
                 .panel { position: fixed; z-index: 4; right: 8px; left: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px));
                          max-width: 420px; margin-left: auto; height: min(52vh, 420px);
                          pointer-events: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px;
@@ -735,11 +747,37 @@ const WP_SHIM = (() => {
                 input { flex: 1; min-width: 0; font-size: 16px; padding: 10px; border-radius: 8px;
                         border: 1px solid #2c2c36; background: #1a1a21; color: #f2f2f4; }
                 .send { border: 0; border-radius: 8px; background: #3a6df0; color: #fff; font-size: 16px; font-weight: 700; padding: 0 14px; min-height: 44px; }
+                /*
+                 * **入ったらまず出す待機画面**（2026-09-23 ユーザー要望）。Amazon のメニューの上を丸ごと覆う。
+                 *   ・メニューで待たされる不安をなくす（ゲストからは「待合室」に見える）
+                 *   ・Amazon のボタンを隠すので、間違って別のものを押せない
+                 *   ・**「▶ 再生をはじめる」を押してもらうのが本命**。ブラウザは「人が触るまで音の出る再生を許さない」ので、
+                 *     この1回のタップで「再生が始まらない」と「音が消えている」の両方が直る
+                 */
+                .gate { position: fixed; inset: 0; z-index: 8; pointer-events: auto; background: #0d0d12;
+                        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+                        padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px)); text-align: center; color: #f2f2f4; }
+                .gate .gtitle { font: 700 22px/1.4 -apple-system, system-ui, sans-serif; }
+                .gate .gsub { font: 600 15px/1.6 -apple-system, system-ui, sans-serif; color: #9a9aa6; max-width: 340px; }
+                .gate .gwhat { font: 600 14px/1.5 -apple-system, system-ui, sans-serif; color: #d8d8e0;
+                               background: rgba(255,255,255,.07); border-radius: 10px; padding: 8px 14px; max-width: 340px; }
+                .gate .ggo { border: 0; border-radius: 16px; cursor: pointer; color: #fff; background: #3a6df0;
+                             font: 700 22px/1.3 -apple-system, system-ui, sans-serif; padding: 18px 34px; min-width: 240px;
+                             box-shadow: 0 6px 24px rgba(0,0,0,.6); animation: wppulse2 1.6s ease-in-out infinite; }
+                .gate .gnote { font: 600 13px/1.5 -apple-system, system-ui, sans-serif; color: #7a7a86; max-width: 340px; }
+                @keyframes wppulse2 { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
                 /* 上の安全領域（iPhone の時刻の帯など）の高さを測るためだけの見えない箱 */
                 .safe { position: fixed; top: 0; left: 0; width: 0; height: env(safe-area-inset-top, 0px); pointer-events: none; }
                 [hidden] { display: none !important; }
             </style>
             <div class="safe" aria-hidden="true"></div>
+            <div class="gate" hidden>
+                <div class="gtitle">KINUGAWA Party Theater</div>
+                <div class="gwhat gtitlename" hidden></div>
+                <div class="gsub gmsg">つないでいます…</div>
+                <button class="ggo" type="button" hidden>▶ 再生をはじめる</button>
+                <div class="gnote gnotetext" hidden></div>
+            </div>
             <div class="status">
                 <div class="pill"><span class="dot"></span><span class="text">KINUGAWA Party Theater</span></div>
             </div>
@@ -927,10 +965,16 @@ const WP_SHIM = (() => {
                  * **打っているかだけが変わったときは、映像に触らない**（panelOnly）。
                  * 触るとプレイヤーが描き直し・読み込み直しをして再生が乱れる
                  * （2026-09-20 実機: iPhone が1分遅れた。2026-09-14 にも3〜4秒の遅れを実測している）
+                 *
+                 * **キーボードが動いている間（following）も映像に触らない**（2026-09-23 修正）。
+                 * 上の fitPlayerToVideo は `!following` で守ってあったが、こちらの placePanel は素通りで、
+                 * 中で同じ fitPlayerToVideo を呼んでいた。キーボードが動くと毎回 keyboardShift() が変わって
+                 * ここに入るので、動いている最中にプレイヤーを書き換えていた。
+                 * 映像の合わせ直しは followKeyboard が動き終わりに1回だけやる。
                  */
                 const onlyComposing = lastLayoutSig.startsWith(`${baseSig}|`);
                 lastLayoutSig = sig;
-                placePanel(onlyComposing);
+                placePanel(onlyComposing || following);
             }
         }
 
@@ -1443,9 +1487,19 @@ const WP_SHIM = (() => {
             userClosed = true;
             setOpen(false);
         });
-        // 打ち始め・打ち終わりで、チャット欄の大きさを測り直す（キーボードの出入りより先に来ることがあるので少し後にも）
+        /*
+         * 打ち始め・打ち終わりで、チャット欄の大きさを測り直す。
+         *
+         * **ここで映像に触ってはいけない**（2026-09-23 修正）。キーボードが動き始めるのと同時なので、
+         * 「動いている間はチャット欄だけ・動き終わってから1回だけ映像」（followKeyboard）の決めごとが破れる。
+         * プレイヤーの CSS を書き換えるたびに読み込み直しが起きるため、本物の Prime でゲストが3〜4秒遅れた。
+         *
+         * そこで、すぐやるのは**チャット欄だけ**（placePanel(true)）にして、映像の合わせ直しは
+         * followKeyboard に任せる。**キーボードでビューポートが縮まない端末（Firefox Android）でも大丈夫**:
+         * ずれが最初から変わらないので「落ち着いた」と判定され、250ms 後に1回だけ映像を合わせ直して終わる。
+         */
         for (const ev of ['focus', 'blur']) {
-            q('input').addEventListener(ev, () => { placePanel(); setTimeout(placePanel, 350); setTimeout(placePanel, 800); });
+            q('input').addEventListener(ev, () => { placePanel(true); followKeyboard(); });
         }
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
@@ -1479,6 +1533,107 @@ const WP_SHIM = (() => {
         }
 
 );
+
+        /*
+         * --- 待機画面と音量（2026-09-23 ユーザー要望）--------------------------------
+         *
+         * ユーザーの困りごとは2つで、**原因は同じ**:
+         *   ・ゲストが入ると Prime のプレイヤーが消音になっている
+         *   ・Amazon のメニューで待たされる／再生が始まらないことがある
+         *
+         * ブラウザは「その画面で人が一度も触っていないうちは、音の出る再生をさせない」。
+         * 招待ページの「🌐 ブラウザで見る」を押した"触った"は**別のページの出来事**なので、
+         * Amazon 側には引き継がれない。そのため Amazon は消音で始める（始まらないこともある）。
+         *
+         * そこで、入ったらまず自分たちの待機画面で Amazon のメニューを覆い、
+         * **「▶ 再生をはじめる」の1回のタップ**をもらう。そのタップで、
+         *   ① Amazon の「続きを観る／今すぐ観る」を代わりに押す（再生が始まらない対策）
+         *   ② 音量を最大にして消音を解く（消音対策）
+         * をまとめて行う。ゲストから見ると「待合室 → ボタン1つ → 本編」になる。
+         */
+        const VOL_HOLD_MS = 30000;      // 押したあと、これだけの間は音量を最大に保つ（プレイヤーが読み込み直して戻すため）
+        const GATE_ESCAPE_MS = 25000;   // これだけ待っても始まらなければ、Amazon の画面を見る逃げ道を出す
+        const FULL_VOLUME = 1;          // 目指す音量。**ここから下げる手段は出さない**（端末の物理ボタンで調整する）
+        let gatePassed = false;         // 「▶ 再生をはじめる」を押した
+        let gateShownAt = Date.now();
+        let volumeHoldUntil = 0;
+
+        /** 音を出せる状態にする（人が触ったあとに呼ぶこと。触る前に呼んでも効かない） */
+        function applyVolume(force = false) {
+            let done = false;
+            for (const v of document.querySelectorAll('video')) {
+                if (!Number.isFinite(v.duration) || v.duration < 300) continue;   // 予告などの短い動画は触らない
+                try {
+                    if (force || v.muted) v.muted = false;
+                    if (force || v.volume < FULL_VOLUME - 0.01) v.volume = FULL_VOLUME;
+                    done = true;
+                } catch { /* プレイヤーが受け付けないことがある */ }
+            }
+            return done;
+        }
+
+        /**
+         * Amazon の再生ボタンを探す。**「続きを観る」を先に**（途中から見ている人の位置を保つため）。
+         * 文字で探すのは、Amazon の作りが変わっても当たるようにするため（class 名はよく変わる）
+         */
+        function findPlayButton() {
+            const ORDER = [/続きを観る/, /今すぐ観る/, /^再生$/, /最初から(再生|観る)/];
+            const cands = Array.from(document.querySelectorAll('a, button, [role="button"]'))
+                .filter((el) => {
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 20 || r.height < 20) return false;
+                    const s = (el.textContent || '').replace(/\s+/g, ' ').trim();
+                    return s.length > 0 && s.length <= 20;
+                });
+            for (const re of ORDER) {
+                const hit = cands.find((el) => re.test((el.textContent || '').replace(/\s+/g, ' ').trim()));
+                if (hit) return hit;
+            }
+            return null;
+        }
+
+        /**
+         * Amazon の再生ボタンを代わりに押す。**プレイヤーが出ているときは押さない**
+         * （本編の上で押すと、最初から再生し直しになることがある）
+         */
+        function clickPlayOnce() {
+            if (playerReady || mainVideo()) return false;
+            const btn = findPlayButton();
+            if (!btn) return false;
+            try { btn.click(); return true; } catch { return false; }
+        }
+
+        /** 待機画面を閉じて、本編へ進む（人が押したときだけ呼ぶ） */
+        function passGate() {
+            gatePassed = true;
+            touched = true;
+            volumeHoldUntil = Date.now() + VOL_HOLD_MS;
+            /*
+             * まだプレイヤーが出ていなければ、Amazon のボタンを代わりに押す。
+             * **出ているときは押さない**（本編の上で押すと、最初から再生し直しになることがある）
+             */
+            clickPlayOnce();
+            /*
+             * 押した直後はまだページが出来上がっていないことがあり、ボタンが見つからない。
+             * **見つからなかったときだけ**、少しあとにもう2回だけ試す（プレイヤーが出たら何もしない）。
+             * 「何度も play() を呼ぶ」のは Android で Amazon のプレイヤーを壊したので、やらない
+             * （README「Android で再生できない＝Firefox の DRM が壊れていた」の前に踏んだ失敗）
+             */
+            setTimeout(clickPlayOnce, 3000);
+            setTimeout(clickPlayOnce, 8000);
+            applyVolume(true);
+            const v = mainVideo();
+            if (v && v.paused && hostPlaying) v.play().catch(() => {});
+            if (connected) socket.emit('request-sync');
+            q('.gate').hidden = true;
+            render();
+        }
+
+        q('.ggo').addEventListener('click', passGate);
+        q('.gnotetext').addEventListener('click', (e) => {
+            // 「Amazon の画面を見る」（ログインやプロフィール選びが隠れているとき用）
+            if (e.target && e.target.classList.contains('gescape')) { gatePassed = true; q('.gate').hidden = true; render(); }
+        });
 
         // --- 再生が止められたとき ------------------------------------------------
         // iPhone は、人が触っていないと動画を再生できないことがある。
@@ -1687,6 +1842,70 @@ const WP_SHIM = (() => {
             q('.fix').hidden = !fixShown;
             // ホストの広告の間はこちらを止めて待つ。止まった理由を真ん中に出す（2026-09-14 ユーザー報告: 再生されたと思ったらすぐ止まる）
             q('.adwait').hidden = !(connected && hasHost && hostAd && !selfAd && !otherVideo && !hostHold && playerReady && !fixShown && q('.clock:not(.adwait)').hidden);
+
+            // --- 待機画面と音量（2026-09-23）------------------------------------
+            renderGate();
+        }
+
+        /**
+         * 待機画面（Amazon のメニューを覆う「待合室」）と、音量のボタンの出し入れ。
+         * 押すまでは覆ったまま。押したら二度と出さない（gatePassed）
+         */
+        function renderGate() {
+            const gate = q('.gate');
+            /*
+             * **すでに音が出て再生中なら、待機画面は出さない**。
+             * 待機画面は「音の出る再生の許可をもらう」ためのものなので、もう出ているなら用がない。
+             * 出したままだと映像を隠してしまう（PC や、開き直したあとがこれに当たる）
+             */
+            if (!gatePassed) {
+                const playing = mainVideo();
+                if (playing && !playing.paused && !playing.muted && playing.volume > 0.05) gatePassed = true;
+            }
+            if (!gatePassed) {
+                gate.hidden = false;
+                /*
+                 * ボタンは**つながってから**出す。つながる前に押されると、ホストの位置を知らないまま
+                 * 頭から再生が始まってしまう（押したあとに合わせ直されるが、ゲストには故障に見える）
+                 */
+                q('.ggo').hidden = !connected;
+                const waited = Date.now() - gateShownAt;
+                q('.gmsg').textContent = !connected
+                    ? (waited > 10000 ? 'つながりません。電波の良いところで、招待ページから開き直してください' : 'つないでいます…')
+                    : !hasHost ? 'ホストがまだ来ていません。先に入って待てます'
+                    : hostPlaying ? 'ホストはもう見ています。押すと途中から合流します'
+                    : 'ホストの再生を待っています。先に押して待てます';
+                const who = q('.gtitlename');
+                who.hidden = !connected;
+                who.textContent = `ルーム ${target.room}${people > 1 ? `・${people}人が待っています` : ''}`;
+                // 押すまで進まないので、待たせすぎたら Amazon の画面を見る逃げ道を出す（ログインやプロフィール選びが隠れている場合）
+                const note = q('.gnotetext');
+                const stuck = Date.now() - gateShownAt > GATE_ESCAPE_MS;
+                note.hidden = !stuck;
+                if (stuck && !note.dataset.on) {
+                    note.dataset.on = '1';
+                    note.textContent = 'ログインやプロフィールの選択が出ているかもしれません。';
+                    const a = document.createElement('button');
+                    a.type = 'button';
+                    a.className = 'gescape';
+                    a.textContent = 'Amazon の画面を見る';
+                    a.style.cssText = 'margin-left:6px;border:0;background:transparent;color:#7aa2ff;font:inherit;text-decoration:underline;cursor:pointer;';
+                    note.appendChild(a);
+                }
+                return;
+            }
+            gate.hidden = true;
+
+            /*
+             * 押したあとしばらくは音量を最大に保つ。Prime は読み込み直すたびに音量を戻すので、
+             * 1回入れただけでは消音に戻ることがある。
+             * **保つのは押してから 30 秒だけ**。ずっと張り付くと、見ている人が Prime 側で下げた音量を
+             * こちらが戻し続けてしまう。そのあとの調整は**端末の物理ボタン**で行う（2026-09-23 ユーザー判断）
+             */
+            const v = mainVideo();
+            // 押したときにプレイヤーがまだ無いこともある。**出てくるまで待つ**（出てから 30 秒を数える）
+            if (!v) volumeHoldUntil = Math.max(volumeHoldUntil, Date.now() + VOL_HOLD_MS);
+            if (Date.now() < volumeHoldUntil) applyVolume();
         }
         render();
     }
