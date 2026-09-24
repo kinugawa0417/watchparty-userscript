@@ -2085,7 +2085,7 @@ const WP_SHIM = (() => {
 })();
 
 
-    // ---- userscript/prune-ads.js ----
+    // ---- extension/content/prune-ads.js（ホストの拡張機能と同じもの）----
 /*
  * **Prime Video の広告を消す**（2026-09-25 ユーザー要望）。
  *
@@ -2108,7 +2108,9 @@ const WP_SHIM = (() => {
  * ■ 気をつけること
  * ・`JSON.parse` と `fetch` はページ中で何度も使われるので、**関わるものでなければ何も触らない**
  * ・**例外を外に出さない**。ここで throw すると Amazon のページ全体が止まる
- * ・招待から開いたタブでだけ読み込む（ふだんの Amazon には入れない）
+ * ・スマホ用スクリプトでは、招待から開いたタブでだけ読み込む（ふだんの Amazon には入れない）
+ * ・ホストの拡張機能では prime-plan.js の後に読み込む（prime-plan は消される前の並びを読むため、
+ *   元の JSON.parse を先に取っておく）。Chrome でホストをしても広告が出ないようにするため（2026-09-25）
  */
 const WP_PRUNE = (() => {
     'use strict';
