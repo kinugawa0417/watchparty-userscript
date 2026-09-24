@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（テスト）
 // @namespace    watchparty-fixed-stg
-// @version      1.0.17
+// @version      1.0.18
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -31,7 +31,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = "watchparty-hub-stg.pages.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.17";
+    const __WP_VERSION__ = "1.0.18";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -191,8 +191,15 @@ const WP_US = (() => {
          */
         primeWeb(v, room, name, android, script) {
             if (v.service !== 'prime') return null;
-            const path = `www.amazon.co.jp/gp/video/detail/${enc(v.contentId)}/` +
-                `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
+            const q = `wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
+            /*
+             * **`#` の後ろにも同じ印を付ける**（2026-09-25。NZ の人だけ動かない報告から）。
+             * ログインや地域の選びで別のアドレスへ回されると `?` 以降は消えるが、`#` の後ろは残る。
+             * 消えるとスクリプトは「招待から来たタブではない」と判断して最初の行で終了してしまう。
+             * Netflix では 2026-09-14 に同じ対策を入れてある（netflixWeb）。読む側（shim.js の readRoom）は
+             * もともと `?` が無ければ `#` を見る作りなので、付けるだけでよい。
+             */
+            const path = `www.amazon.co.jp/gp/video/detail/${enc(v.contentId)}/?autoplay=1&${q}#${q}`;
             /*
              * Android は **Firefox で開く**（2026-09-14）。Chrome は拡張機能が使えず、自動で合わせるスクリプトが動かない。
              * Firefox なら Violentmonkey で同じスクリプトが動く。intent:// でアプリを指定し、
@@ -208,8 +215,9 @@ const WP_US = (() => {
          */
         primeVideoWeb(v, room, name, android, script) {
             if (v.service !== 'prime') return null;
-            const path = `www.primevideo.com/detail/${enc(v.appId || v.contentId)}/` +
-                `?autoplay=1&wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
+            // `#` にも印を付ける理由は primeWeb と同じ。**海外の人はこちらを使うので、こちらこそ効く**
+            const q = `wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
+            const path = `www.primevideo.com/detail/${enc(v.appId || v.contentId)}/?autoplay=1&${q}#${q}`;
             return android ? urls.firefox(`https://${path}`) : `https://${path}`;
         },
 
