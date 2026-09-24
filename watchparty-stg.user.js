@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（テスト）
 // @namespace    watchparty-fixed-stg
-// @version      1.0.18
+// @version      1.0.19
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -31,7 +31,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = "watchparty-hub-stg.pages.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.18";
+    const __WP_VERSION__ = "1.0.19";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -2074,9 +2074,131 @@ const WP_SHIM = (() => {
 })();
 
 
+    // ---- userscript/prune-ads.js ----
+/*
+ * **Prime Video の広告を消す**（2026-09-25 ユーザー要望）。
+ *
+ * ■ 何をしているか
+ * Amazon のプレイヤーは、再生の前に「再生情報」を取りに行き、その返事（JSON）に
+ * **どこで広告を挟むか**が書いてある。ここでは `JSON.parse` を包んで、その**広告の指定だけを消す**。
+ * 指定が無ければプレイヤーは広告を挟まない。
+ *
+ * ■ なぜこの形か（2026-09-25 の調査より）
+ * Brave では Prime の広告が出ないので、**Brave が何をしているのか**を調べたところ、
+ * 通信は止めておらず（止めていたのは利用状況の送信と広告ブロック検知の目印だけ）、
+ * ページに差し込んだプログラムで **`JSON.parse` を横取りして同じ項目を削っていた**（uBlock 系の `json-prune`）。
+ * 消す項目はそのとき実際に使われていたものと同じ。ここは**自分で考えた抜け道ではなく、
+ * 広く配られている公開のフィルターと同じ内容**（詳細は README「Brave は『再生情報から広告の指定を削って』いる」）。
+ *
+ * ■ やらないこと
+ * **広告を「流したことにして飛ばす」ことはしない。** それは広告主をだますことになる（2026-09-11 の決め）。
+ * ここでやるのは「広告を取りに行かせない」だけ。
+ *
+ * ■ 気をつけること
+ * ・`JSON.parse` は**ページ中で何度も使われる**ので、**関わる項目が無ければ何も触らない**（速さのため）
+ * ・**例外を外に出さない**。ここで throw すると Amazon のページ全体が止まる
+ * ・招待から開いたタブでだけ読み込む（ふだんの Amazon には入れない）
+ */
+const WP_PRUNE = (() => {
+    'use strict';
+
+    /*
+     * 消す場所。`.[-].` は「配列の全部の要素」を表す。
+     * 2026-09-25 に Brave が実際に使っていた指定そのまま。
+     */
+    const PATHS = [
+        'cuepointPlaylist',
+        'vodPlaybackUrls.result.playbackUrls.cuepoints',
+        'vodPlaylistedPlaybackUrls.result.playbackUrls.pauseBehavior',
+        'vodPlaylistedPlaybackUrls.result.playbackUrls.pauseAdsResolution',
+        'vodPlaylistedPlaybackUrls.result.playbackUrls.intraTitlePlaylist.[-].shouldShowOnScrubBar',
+        /*
+         * **`ads`（いちばん外側）は入れない**（2026-09-25）。Brave の指定には入っているが、
+         * これを消すと**本物の Prime でホストと 8〜16 秒ずれた**（2回とも再現。外すと −1.3 秒に戻る）。
+         * 名前がありふれていて、再生情報以外の返事にある同名の項目まで消してしまうため。
+         * Brave は読み込みのいちばん最初から割り込んでいるのに対し、こちらは後から入るので、
+         * 消える相手が変わるのだと思われる。**効き目より、再生を壊さないことを優先する。**
+         */
+    ].filter((p) => !(globalThis.__wpPruneSkip || []).includes(p)).map((p) => p.split('.'));
+
+    /** 関わりのある返事かどうかを、文字列のうちに手早く見分ける（ほとんどの JSON.parse はここで素通り） */
+    const QUICK = /"(?:cuepointPlaylist|cuepoints|pauseBehavior|pauseAdsResolution|shouldShowOnScrubBar|ads)"/;
+
+    let pruned = 0;
+
+    /**
+     * 一か所ぶんの指定をたどって消す。
+     * @param {*} node いまの場所
+     * @param {string[]} parts 残りの道のり
+     * @returns {boolean} 消したか
+     */
+    function walk(node, parts) {
+        if (!node || typeof node !== 'object') return false;
+        const key = parts[0];
+        if (parts.length === 1) {
+            if (key === '[-]') {
+                // 配列そのものを消す指定はここでは使わない
+                return false;
+            }
+            if (Object.prototype.hasOwnProperty.call(node, key)) {
+                delete node[key];
+                return true;
+            }
+            return false;
+        }
+        const rest = parts.slice(1);
+        if (key === '[-]') {
+            if (!Array.isArray(node)) return false;
+            let hit = false;
+            for (const item of node) if (walk(item, rest)) hit = true;
+            return hit;
+        }
+        return walk(node[key], rest);
+    }
+
+    /** 返ってきた中身から、広告の指定だけを消す */
+    function prune(obj) {
+        let hit = false;
+        for (const parts of PATHS) if (walk(obj, parts)) hit = true;
+        if (hit) pruned++;
+        return hit;
+    }
+
+    /** `JSON.parse` を包む。**一度だけ**。 */
+    function install() {
+        if (globalThis.__wpPruneAds) return false;
+        globalThis.__wpPruneAds = true;
+        const native = JSON.parse;
+        JSON.parse = function (text, reviver) {
+            const obj = native.apply(this, arguments);
+            // 関わりのある返事のときだけ中を見る（文字列でないときは素通り）
+            try {
+                if (typeof text === 'string' && QUICK.test(text)) prune(obj);
+            } catch { /* 何があってもページを壊さない */ }
+            return obj;
+        };
+        // 差し替えたことを見えにくくする（ページ側の見た目を変えない）
+        try {
+            Object.defineProperty(JSON.parse, 'name', { value: 'parse', configurable: true });
+            Object.defineProperty(JSON.parse, 'length', { value: native.length, configurable: true });
+        } catch { /* 変えられなくても構わない */ }
+        return true;
+    }
+
+    return { install, prune, count: () => pruned };
+})();
+
+
     // 友達の画面の「🌐 ブラウザで見る」から開いたタブだけで動く。ふだんの Amazon には何もしない
     const target = WP_SHIM.readRoom();
     if (!target) return;
+
+    /*
+     * **広告の指定を消す**（2026-09-25）。再生情報を取りに行く前に入れる必要があるが、
+     * 待機画面が「▶ 再生をはじめる」まで再生を止めているので、ここ（document-idle）で間に合う。
+     * Netflix は別の仕組みなので Prime のときだけ。
+     */
+    if (false && location.hostname !== 'www.netflix.com') WP_PRUNE.install();
     // extension/content/prime-plan.js（ページの通信を見張る）は入れない。広告の入る位置はホストの PC から届く（2026-09-14）
     WP_SHIM.start(target);
 
