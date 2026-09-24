@@ -1898,7 +1898,8 @@ const WP_SHIM = (() => {
                 who.textContent = `ルーム ${target.room}${people > 1 ? `・${people}人が待っています` : ''}`;
                 // 押すまで進まないので、待たせすぎたら Amazon の画面を見る逃げ道を出す（ログインやプロフィール選びが隠れている場合）
                 const note = q('.gnotetext');
-                const stuck = Date.now() - gateShownAt > GATE_ESCAPE_MS;
+                // 古いと断られたときは出さない（逃げ道から見始めると、合わないまま見続けてしまう）
+                const stuck = !tooOld && Date.now() - gateShownAt > GATE_ESCAPE_MS;
                 note.hidden = !stuck;
                 if (stuck && !note.dataset.on) {
                     note.dataset.on = '1';
