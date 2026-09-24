@@ -409,6 +409,8 @@ const WP_SHIM = (() => {
         let selfAd = false;
         let hostAd = false;
         let connected = false;
+        /** サーバーに「このスクリプトは古い」と断られた（2026-09-25）。招待ページで入れ直してもらう */
+        let tooOld = false;
         let me = null;
         /** ルームにホストがいるか（2026-09-14）。ホストの接続が切れたら、合わせるのをやめて今のまま再生を続ける。戻れば元どおり */
         let hasHost = true;
@@ -483,6 +485,11 @@ const WP_SHIM = (() => {
             render();
         });
         socket.on('disconnect', () => { connected = false; render(); });
+        socket.on('action-rejected', (r) => {
+            if (!r || r.reason !== 'script-too-old') return;
+            tooOld = true;
+            render();
+        });
         socket.on('update-participants', (list) => {
             if (!Array.isArray(list)) return;
             people = list.length;
@@ -1763,7 +1770,8 @@ const WP_SHIM = (() => {
                 && !selfAd && !hostAd && !otherVideo && !hostHold
                 && lag >= DRIFT_SHOW_SEC && lag <= 300) ? lag : null;
             q('.text').textContent =
-                !connected ? 'KINUGAWA Party Theater つないでいます…'
+                tooOld ? 'スクリプトが古いので見られません。招待ページに戻って入れ直してください'
+                : !connected ? 'KINUGAWA Party Theater つないでいます…'
                 : !hasHost ? 'ホストの接続が切れました（戻るまで、このまま再生します）'
                 : hostHold ? 'ホストが次の作品を選んでいます'
                 : otherVideo ? 'ホストが別の作品に変えました'
@@ -1878,7 +1886,9 @@ const WP_SHIM = (() => {
                  */
                 q('.ggo').hidden = !connected;
                 const waited = Date.now() - gateShownAt;
-                q('.gmsg').textContent = !connected
+                q('.gmsg').textContent = tooOld
+                    ? '⚠ スクリプトが古いので見られません。招待ページに戻り「スクリプトを入れ直す」を押してください'
+                    : !connected
                     ? (waited > 10000 ? 'つながりません。電波の良いところで、招待ページから開き直してください' : 'つないでいます…')
                     : !hasHost ? 'ホストがまだ来ていません。先に入って待てます'
                     : hostPlaying ? 'ホストはもう見ています。押すと途中から合流します'
