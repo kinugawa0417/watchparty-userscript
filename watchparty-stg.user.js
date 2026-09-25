@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（テスト）
 // @namespace    watchparty-fixed-stg
-// @version      1.0.20
+// @version      1.0.21
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
 // @match        https://www.netflix.com/*
 // @noframes
-// @run-at       document-idle
+// @run-at       document-start
 // @inject-into  page
 // @grant        none
 // ==/UserScript==
@@ -20,6 +20,8 @@
      * 原因の特定の前に、ふだんの Amazon のページには一切触れない形にした。
      */
     if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
+    // 一番外のページだけで動く（@noframes と同じ。読み込みの最初に入れるようにしたので、念のため自分でも確かめる）
+    try { if (window.top !== window) return; } catch { return; }
     {
         let invited = /(?:^|[?&#])wp=/.test(location.search + '&' + location.hash);
         try { invited = invited || Boolean(sessionStorage.getItem('wp:userscript')); } catch { /* 使えない設定 */ }
@@ -31,7 +33,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = "watchparty-hub-stg.pages.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.20";
+    const __WP_VERSION__ = "1.0.21";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -2328,11 +2330,15 @@ const WP_PRUNE = (() => {
     if (!target) return;
 
     /*
-     * **広告の指定を消す**（2026-09-25）。再生情報を取りに行く前に入れる必要があるが、
-     * 待機画面が「▶ 再生をはじめる」まで再生を止めているので、ここ（document-idle）で間に合う。
-     * Netflix は別の仕組みなので Prime のときだけ。
+     * **広告消しは、ページの読み込みの最初（document-start）に入れる**（2026-09-25）。
+     * 最初は読み込みの後（document-idle）に入れていたが、iPhone 実機で Amazon が先に配信リストを取りに行き、
+     * 広告が消えない回があった（再生タブがつながって3秒後には、動画にもう75秒の広告が入っていた）。
+     * Brave も拡張機能も読み込みの最初から割り込んでいる。Netflix は別の仕組みなので Prime のときだけ。
      */
     if (location.hostname !== 'www.netflix.com') WP_PRUNE.install();
+
+    // ここから下（画面・チャット・同期）は、今までどおり読み込みの後に動かす
+    const __wpStartRest = () => {
     // extension/content/prime-plan.js（ページの通信を見張る）は入れない。広告の入る位置はホストの PC から届く（2026-09-14）
     WP_SHIM.start(target);
 
@@ -4509,4 +4515,7 @@ const WP_PRUNE = (() => {
     start().catch(e => console.warn('[wp] bridge failed:', e));
 })();
 
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', __wpStartRest, { once: true });
+    else __wpStartRest();
 })();
