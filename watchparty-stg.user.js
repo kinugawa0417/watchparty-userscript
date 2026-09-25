@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         KINUGAWA Party Theater（テスト）
-// @namespace    watchparty-fixed-stg
-// @version      1.0.22
+// @name         KINUGAWA Party Theater（Prime を自動で合わせる）
+// @namespace    watchparty-fixed
+// @version      1.0.23
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -22,25 +22,34 @@
     if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
     // 一番外のページだけで動く（@noframes と同じ。読み込みの最初に入れるようにしたので、念のため自分でも確かめる）
     try { if (window.top !== window) return; } catch { return; }
+    /*
+     * **本番の招待かテストの招待かを、リンクの印（&wpe=）で見て、つなぐ先を選ぶ**（2026-09-25）。
+     * 印なし＝本番、stg＝テスト。スクリプトは1本・同じ名前（入れれば上書き）で、どちらの招待でも動く。
+     * 招待から開いたタブはページが移っても続けられるよう、タブの印（sessionStorage）を環境ごとに持つ。
+     * 決まった2つ以外の印では何もしない（リンクでサーバーの場所を指定することはできない）
+     */
+    const __WP_SERVERS__ = {"":"https://wp-sync-w4kqv7.fly.dev","stg":"https://wp-sync-stg.fly.dev"};
+    const __WP_HUBS__ = {"":"watchparty-hub.pages.dev","stg":"watchparty-hub-stg.pages.dev"};
+    let __WP_TAG__ = null;
     {
-        /*
-         * **自分の環境の招待でだけ動く**（2026-09-25）。テストの招待には &wpe=stg が付き、本番には付かない（common.js の ENV_TAG）。
-         * 本番用とテスト用を両方入れた端末で、両方が動いて届かないチャット欄が手前に出ていた。タブの印も環境ごとに分ける
-         */
-        const envTag = "stg";
         const where = location.search + '&' + location.hash;
-        const linkTag = (/(?:^|[?&#])wpe=([a-z]{1,8})/.exec(where) || [])[1] || '';
-        let invited = /(?:^|[?&#])wp=/.test(where) && linkTag === envTag;
-        try { invited = invited || Boolean(sessionStorage.getItem('wp:userscript' + (envTag ? ':' + envTag : ''))); } catch { /* 使えない設定 */ }
-        if (!invited) return;
+        if (/(?:^|[?&#])wp=/.test(where)) {
+            __WP_TAG__ = (/(?:^|[?&#])wpe=([a-z]{1,8})/.exec(where) || [])[1] || '';
+        } else {
+            try {
+                if (sessionStorage.getItem('wp:userscript')) __WP_TAG__ = '';
+                else if (sessionStorage.getItem('wp:userscript:stg')) __WP_TAG__ = 'stg';
+            } catch { /* 使えない設定 */ }
+        }
+        if (__WP_TAG__ === null || !Object.prototype.hasOwnProperty.call(__WP_SERVERS__, __WP_TAG__)) return;
     }
     // bridge.js に「スマホのスクリプトの中で動いている」ことを伝える（ホストだけが要る重い処理を省く）
     const __WP_USERSCRIPT__ = true;
-    const __WP_SERVER__ = "https://wp-sync-stg.fly.dev";
+    const __WP_SERVER__ = __WP_SERVERS__[__WP_TAG__];
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
-    const __WP_HUB_HOST__ = "watchparty-hub-stg.pages.dev";
+    const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.22";
+    const __WP_VERSION__ = "1.0.23";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
