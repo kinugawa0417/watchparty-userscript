@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.18
+// @version      1.0.21
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
 // @match        https://www.netflix.com/*
 // @noframes
-// @run-at       document-idle
+// @run-at       document-start
 // @inject-into  page
 // @grant        none
 // ==/UserScript==
@@ -20,6 +20,8 @@
      * 原因の特定の前に、ふだんの Amazon のページには一切触れない形にした。
      */
     if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
+    // 一番外のページだけで動く（@noframes と同じ。読み込みの最初に入れるようにしたので、念のため自分でも確かめる）
+    try { if (window.top !== window) return; } catch { return; }
     {
         let invited = /(?:^|[?&#])wp=/.test(location.search + '&' + location.hash);
         try { invited = invited || Boolean(sessionStorage.getItem('wp:userscript')); } catch { /* 使えない設定 */ }
@@ -31,7 +33,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = "watchparty-hub.pages.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.18";
+    const __WP_VERSION__ = "1.0.21";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -409,6 +411,8 @@ const WP_SHIM = (() => {
         let selfAd = false;
         let hostAd = false;
         let connected = false;
+        /** サーバーに「このスクリプトは古い」と断られた（2026-09-25）。招待ページで入れ直してもらう */
+        let tooOld = false;
         let me = null;
         /** ルームにホストがいるか（2026-09-14）。ホストの接続が切れたら、合わせるのをやめて今のまま再生を続ける。戻れば元どおり */
         let hasHost = true;
@@ -483,6 +487,11 @@ const WP_SHIM = (() => {
             render();
         });
         socket.on('disconnect', () => { connected = false; render(); });
+        socket.on('action-rejected', (r) => {
+            if (!r || r.reason !== 'script-too-old') return;
+            tooOld = true;
+            render();
+        });
         socket.on('update-participants', (list) => {
             if (!Array.isArray(list)) return;
             people = list.length;
@@ -1763,7 +1772,8 @@ const WP_SHIM = (() => {
                 && !selfAd && !hostAd && !otherVideo && !hostHold
                 && lag >= DRIFT_SHOW_SEC && lag <= 300) ? lag : null;
             q('.text').textContent =
-                !connected ? 'KINUGAWA Party Theater つないでいます…'
+                tooOld ? 'スクリプトが古いので見られません。招待ページに戻って入れ直してください'
+                : !connected ? 'KINUGAWA Party Theater つないでいます…'
                 : !hasHost ? 'ホストの接続が切れました（戻るまで、このまま再生します）'
                 : hostHold ? 'ホストが次の作品を選んでいます'
                 : otherVideo ? 'ホストが別の作品に変えました'
@@ -1878,7 +1888,9 @@ const WP_SHIM = (() => {
                  */
                 q('.ggo').hidden = !connected;
                 const waited = Date.now() - gateShownAt;
-                q('.gmsg').textContent = !connected
+                q('.gmsg').textContent = tooOld
+                    ? '⚠ スクリプトが古いので見られません。招待ページに戻り「スクリプトを入れ直す」を押してください'
+                    : !connected
                     ? (waited > 10000 ? 'つながりません。電波の良いところで、招待ページから開き直してください' : 'つないでいます…')
                     : !hasHost ? 'ホストがまだ来ていません。先に入って待てます'
                     : hostPlaying ? 'ホストはもう見ています。押すと途中から合流します'
@@ -1888,7 +1900,8 @@ const WP_SHIM = (() => {
                 who.textContent = `ルーム ${target.room}${people > 1 ? `・${people}人が待っています` : ''}`;
                 // 押すまで進まないので、待たせすぎたら Amazon の画面を見る逃げ道を出す（ログインやプロフィール選びが隠れている場合）
                 const note = q('.gnotetext');
-                const stuck = Date.now() - gateShownAt > GATE_ESCAPE_MS;
+                // 古いと断られたときは出さない（逃げ道から見始めると、合わないまま見続けてしまう）
+                const stuck = !tooOld && Date.now() - gateShownAt > GATE_ESCAPE_MS;
                 note.hidden = !stuck;
                 if (stuck && !note.dataset.on) {
                     note.dataset.on = '1';
@@ -2074,9 +2087,258 @@ const WP_SHIM = (() => {
 })();
 
 
+    // ---- extension/content/prune-ads.js（ホストの拡張機能と同じもの）----
+/*
+ * **Prime Video の広告を消す**（2026-09-25 ユーザー要望）。
+ *
+ * ■ 何をしているか（Brave が既定で配っている公開のフィルターと同じ内容）
+ * Brave では Prime の広告が出ないので、Brave がページに差し込むプログラムを捕まえて調べた
+ * （tools/.probe-brave/*-injected-shields-on.json）。やっていたのは2つ:
+ *   ① json-prune … 再生情報（JSON）から**広告の予定**を消す。`JSON.parse` を包む
+ *   ② xml-prune  … 動画の配信リスト（.mpd）から**広告の区間そのもの**を消す。`fetch` と XHR の返事を書き換える。
+ *                  あわせて全体の長さと各区間の開始位置も消し、プレイヤーに時間を計算し直させる
+ * 最初は①だけを入れていたが、別の会話の調べで**実際に効いているのは②**と分かった（2026-09-25）。
+ *
+ * ■ 消し方は uBlock（Brave が使っているもの）の決まりに合わせる
+ * `intraTitlePlaylist.[-].shouldShowOnScrubBar` は「その項目を持つ**要素を並びから取り除く**」という意味
+ * （項目だけを消すのではない。最初の版はここを取り違えていた）。
+ *
+ * ■ やらないこと
+ * **広告を「流したことにして飛ばす」ことはしない。** それは広告主をだますことになる（2026-09-11 の決め）。
+ * ここでやるのは「広告を取りに行かせない」だけ。
+ *
+ * ■ 気をつけること
+ * ・`JSON.parse` と `fetch` はページ中で何度も使われるので、**関わるものでなければ何も触らない**
+ * ・**例外を外に出さない**。ここで throw すると Amazon のページ全体が止まる
+ * ・スマホ用スクリプトでは、招待から開いたタブでだけ読み込む（ふだんの Amazon には入れない）
+ * ・ホストの拡張機能では prime-plan.js の後に読み込む（prime-plan は消される前の並びを読むため、
+ *   元の JSON.parse を先に取っておく）。Chrome でホストをしても広告が出ないようにするため（2026-09-25）
+ */
+const WP_PRUNE = (() => {
+    'use strict';
+
+    // テストで一部だけ外して比べるための指定（例: ['mpd'] で ② を入れない）
+    const SKIP = Array.isArray(globalThis.__wpPruneSkip) ? globalThis.__wpPruneSkip : [];
+
+    /*
+     * ① 再生情報から消す場所（Brave の指定そのまま）。`.[-].` は「並びの要素のうち、続きを持つものを取り除く」。
+     * **`ads`（いちばん外側）は入れない**（2026-09-25）。Brave の指定には入っているが、
+     * これを消すと本物の Prime でホストと 8〜16 秒ずれた（2回とも再現）。名前がありふれていて、
+     * 再生情報以外の返事にある同名の項目まで消してしまうためとみられる。**効き目より、再生を壊さないことを優先する。**
+     */
+    const JSON_PATHS = [
+        'cuepointPlaylist',
+        'vodPlaybackUrls.result.playbackUrls.cuepoints',
+        'vodPlaylistedPlaybackUrls.result.playbackUrls.pauseBehavior',
+        'vodPlaylistedPlaybackUrls.result.playbackUrls.pauseAdsResolution',
+        'vodPlaylistedPlaybackUrls.result.playbackUrls.intraTitlePlaylist.[-].shouldShowOnScrubBar',
+    ].filter((p) => !SKIP.includes(p)).map((p) => p.split('.'));
+
+    /** 関わりのある返事かどうかを、文字列のうちに手早く見分ける（ほとんどの JSON.parse はここで素通り） */
+    const QUICK = /"(?:cuepointPlaylist|cuepoints|pauseBehavior|pauseAdsResolution|shouldShowOnScrubBar)"/;
+
+    /*
+     * ② 配信リスト（.mpd）から消すもの（Brave の指定そのまま）。
+     * check … 文書にこれが無ければ何もしない。select … 消すもの（区間の要素と、長さ・開始位置の属性）
+     */
+    const MPD_URL = /\.mpd/;
+    const MPD_RULES = [
+        { check: '[value="Draper"]',
+          select: '//*[name()="Period"][.//*[@value="Draper"]] | /*[name()="MPD"]/@mediaPresentationDuration | //*[name()="Period"]/@start' },
+        { check: '[value="Ad"]',
+          select: '//*[name()="Period"][.//*[@value="Ad"]] | /*[name()="MPD"]/@mediaPresentationDuration | //*[name()="Period"]/@start' },
+        { check: '',
+          select: '//*[name()="Period"][.//*[name()="BaseURL" and contains(text(),"/interstitial/")]]' +
+            ' | /*[name()="MPD"][.//*[name()="BaseURL" and contains(text(),"/interstitial/")]]/@mediaPresentationDuration' +
+            ' | /*[name()="MPD"][.//*[name()="BaseURL" and contains(text(),"/interstitial/")]]/*[name()="Period"]/@start' },
+    ];
+
+    /** 何をどれだけ消したか（テストと記録用。作品の中身や鍵は持たない） */
+    const stats = { json: 0, removedEntries: {}, mpd: 0, mpdPruned: 0, periods: 0, errors: 0 };
+
+    const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+    /** その道のりの先に項目があるか（uBlock の objectFindOwnerFn の「消さない」ほう） */
+    function has(node, parts) {
+        for (let i = 0; i < parts.length; i++) {
+            if (!node || typeof node !== 'object') return false;
+            if (i === parts.length - 1) return hasOwn(node, parts[i]);
+            if (!hasOwn(node, parts[i])) return false;
+            node = node[parts[i]];
+        }
+        return false;
+    }
+
+    /** 道のりをたどって消す（uBlock の objectFindOwnerFn の「消す」ほう） */
+    function walk(node, parts) {
+        if (!node || typeof node !== 'object') return false;
+        const [key, ...rest] = parts;
+        if (rest.length === 0) {
+            if (!hasOwn(node, key)) return false;
+            delete node[key];
+            return true;
+        }
+        if (key === '[-]') {
+            if (!Array.isArray(node)) return false;
+            let hit = false;
+            for (let i = node.length - 1; i >= 0; i--) {
+                if (!has(node[i], rest)) continue;
+                const type = node[i] && typeof node[i].type === 'string' ? node[i].type.slice(0, 20) : '?';
+                stats.removedEntries[type] = (stats.removedEntries[type] || 0) + 1;
+                node.splice(i, 1);
+                hit = true;
+            }
+            return hit;
+        }
+        if (!hasOwn(node, key)) return false;
+        return walk(node[key], rest);
+    }
+
+    /** 返ってきた中身から、広告の指定だけを消す */
+    function prune(obj) {
+        let hit = false;
+        for (const parts of JSON_PATHS) if (walk(obj, parts)) hit = true;
+        if (hit) stats.json++;
+        return hit;
+    }
+
+    /** 配信リストの文書から広告の区間を消す。消したら true */
+    function pruneMpdDoc(doc) {
+        let changed = false;
+        for (const rule of MPD_RULES) {
+            if (rule.check && !doc.querySelector(rule.check)) continue;
+            const found = doc.evaluate(rule.select, doc, null, XPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, null);
+            for (let i = 0; i < found.snapshotLength; i++) {
+                const node = found.snapshotItem(i);
+                if (node.nodeType === 1) { node.remove(); stats.periods++; changed = true; }
+                else if (node.nodeType === 2 && node.ownerElement) { node.ownerElement.removeAttribute(node.nodeName); changed = true; }
+            }
+        }
+        return changed;
+    }
+
+    /** 配信リストの文字列を書き換える。形が違えばそのまま返す */
+    function pruneMpdText(text) {
+        if (typeof text !== 'string' || !/^\s*</.test(text) || !/>\s*$/.test(text)) return text;
+        try {
+            const doc = new DOMParser().parseFromString(text, 'text/xml');
+            if (doc.getElementsByTagName('parsererror').length) return text;
+            stats.mpd++;
+            if (!pruneMpdDoc(doc)) return text;
+            stats.mpdPruned++;
+            return new XMLSerializer().serializeToString(doc);
+        } catch {
+            stats.errors++;
+            return text;
+        }
+    }
+
+    function urlOf(input) {
+        try {
+            if (typeof input === 'string') return input;
+            if (input instanceof Request) return input.url;
+            return String(input);
+        } catch { return ''; }
+    }
+
+    function wrapJsonParse() {
+        const native = JSON.parse;
+        JSON.parse = function (text, reviver) {
+            const obj = native.apply(this, arguments);
+            try {
+                if (typeof text === 'string' && QUICK.test(text)) prune(obj);
+            } catch { stats.errors++; }
+            return obj;
+        };
+        try {
+            Object.defineProperty(JSON.parse, 'name', { value: 'parse', configurable: true });
+            Object.defineProperty(JSON.parse, 'length', { value: native.length, configurable: true });
+        } catch { /* 変えられなくても構わない */ }
+    }
+
+    function wrapFetch() {
+        const native = window.fetch;
+        if (typeof native !== 'function') return;
+        window.fetch = function (input) {
+            const pending = native.apply(this, arguments);
+            if (!MPD_URL.test(urlOf(input))) return pending;
+            return pending.then((before) => before.clone().text().then((text) => {
+                const after = new Response(pruneMpdText(text),
+                    { status: before.status, statusText: before.statusText, headers: before.headers });
+                Object.defineProperties(after, {
+                    ok: { value: before.ok }, redirected: { value: before.redirected },
+                    type: { value: before.type }, url: { value: before.url },
+                });
+                return after;
+            }).catch(() => before));
+        };
+    }
+
+    function wrapXhr() {
+        const Native = window.XMLHttpRequest;
+        if (typeof Native !== 'function') return;
+        // 配信リストを取りに行った XHR だけ覚える。書き換えた結果は1回だけ作って使い回す
+        const marked = new WeakMap();
+        const pruned = (xhr, value) => {
+            const m = marked.get(xhr);
+            if (!m || xhr.readyState !== 4) return value;
+            try {
+                if (typeof value === 'string') {
+                    if (m.src !== value) { m.src = value; m.out = pruneMpdText(value); }
+                    return m.out;
+                }
+                if (value && typeof value === 'object' && value.nodeType === 9 && !m.doc) {
+                    m.doc = true;
+                    stats.mpd++;
+                    if (pruneMpdDoc(value)) stats.mpdPruned++;
+                }
+            } catch { stats.errors++; }
+            return value;
+        };
+        class XMLHttpRequest extends Native {
+            open(method, url, ...rest) {
+                try { if (MPD_URL.test(String(url))) marked.set(this, {}); } catch { /* 無視 */ }
+                return super.open(method, url, ...rest);
+            }
+            get response() { return pruned(this, super.response); }
+            get responseText() { return pruned(this, super.responseText); }
+            get responseXML() { return pruned(this, super.responseXML); }
+        }
+        window.XMLHttpRequest = XMLHttpRequest;
+    }
+
+    /** 包む。**一度だけ**。 */
+    function install() {
+        if (globalThis.__wpPruneAds) return false;
+        globalThis.__wpPruneAds = true;
+        // 本物の Amazon で実際に何を消したかを、テスト（e2e-userscript-real）から読むため。数だけで中身は持たない
+        try { Object.defineProperty(globalThis, '__wpPruneStats', { value: () => JSON.parse(JSON.stringify(stats)) }); } catch { /* 無視 */ }
+        wrapJsonParse();
+        if (!SKIP.includes('mpd')) {
+            try { wrapFetch(); } catch { stats.errors++; }
+            try { wrapXhr(); } catch { stats.errors++; }
+        }
+        return true;
+    }
+
+    return { install, prune, pruneMpdText, stats: () => JSON.parse(JSON.stringify(stats)) };
+})();
+
+
     // 友達の画面の「🌐 ブラウザで見る」から開いたタブだけで動く。ふだんの Amazon には何もしない
     const target = WP_SHIM.readRoom();
     if (!target) return;
+
+    /*
+     * **広告消しは、ページの読み込みの最初（document-start）に入れる**（2026-09-25）。
+     * 最初は読み込みの後（document-idle）に入れていたが、iPhone 実機で Amazon が先に配信リストを取りに行き、
+     * 広告が消えない回があった（再生タブがつながって3秒後には、動画にもう75秒の広告が入っていた）。
+     * Brave も拡張機能も読み込みの最初から割り込んでいる。Netflix は別の仕組みなので Prime のときだけ。
+     */
+    if (location.hostname !== 'www.netflix.com') WP_PRUNE.install();
+
+    // ここから下（画面・チャット・同期）は、今までどおり読み込みの後に動かす
+    const __wpStartRest = () => {
     // extension/content/prime-plan.js（ページの通信を見張る）は入れない。広告の入る位置はホストの PC から届く（2026-09-14）
     WP_SHIM.start(target);
 
@@ -4253,4 +4515,7 @@ const WP_SHIM = (() => {
     start().catch(e => console.warn('[wp] bridge failed:', e));
 })();
 
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', __wpStartRest, { once: true });
+    else __wpStartRest();
 })();
