@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.21
+// @version      1.0.22
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -23,8 +23,15 @@
     // 一番外のページだけで動く（@noframes と同じ。読み込みの最初に入れるようにしたので、念のため自分でも確かめる）
     try { if (window.top !== window) return; } catch { return; }
     {
-        let invited = /(?:^|[?&#])wp=/.test(location.search + '&' + location.hash);
-        try { invited = invited || Boolean(sessionStorage.getItem('wp:userscript')); } catch { /* 使えない設定 */ }
+        /*
+         * **自分の環境の招待でだけ動く**（2026-09-25）。テストの招待には &wpe=stg が付き、本番には付かない（common.js の ENV_TAG）。
+         * 本番用とテスト用を両方入れた端末で、両方が動いて届かないチャット欄が手前に出ていた。タブの印も環境ごとに分ける
+         */
+        const envTag = "";
+        const where = location.search + '&' + location.hash;
+        const linkTag = (/(?:^|[?&#])wpe=([a-z]{1,8})/.exec(where) || [])[1] || '';
+        let invited = /(?:^|[?&#])wp=/.test(where) && linkTag === envTag;
+        try { invited = invited || Boolean(sessionStorage.getItem('wp:userscript' + (envTag ? ':' + envTag : ''))); } catch { /* 使えない設定 */ }
         if (!invited) return;
     }
     // bridge.js に「スマホのスクリプトの中で動いている」ことを伝える（ホストだけが要る重い処理を省く）
@@ -33,7 +40,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = "watchparty-hub.pages.dev";
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.21";
+    const __WP_VERSION__ = "1.0.22";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -142,6 +149,13 @@ const WP_US = (() => {
     const HUB_ID_RE = /^[0-9a-f]{8}$/;
     const HUB_HOST = __WP_HUB_HOST__;
     const hubUrl = (id) => (HUB_ID_RE.test(id || '') ? `https://${id}.${HUB_HOST}/` : null);
+    /*
+     * どちらの環境の招待か（2026-09-25）。本番は空、テストは 'stg'。招待のリンクに &wpe= で付け、
+     * スクリプトは**自分の環境の招待でだけ動く**。本番用とテスト用を両方入れた端末で、本番の部屋に入ると
+     * テスト用もテスト用サーバーにつなごうとして、届かないチャット欄を手前に出していた（ユーザーの iPhone 実機）。
+     * 本番のリンクには何も足さない（今までに配ったリンクもそのまま本番として動く）。
+     */
+    const ENV_TAG = /(^|\.)watchparty-hub-stg\.pages\.dev$/.test(HUB_HOST) ? 'stg' : '';
 
     /** 版 a が版 b より古いか（形が違えば false） */
     function olderVersion(a, b) {
@@ -163,7 +177,7 @@ const WP_US = (() => {
      */
     function scriptQuery(s) {
         const ver = s && VERSION_RE.test(s.version) && DATE_RE.test(s.date) ? `&wpv=${s.version}&wpd=${s.date}` : '';
-        return ver + (s && HUB_ID_RE.test(s.hub || '') ? `&wph=${s.hub}` : '');
+        return ver + (s && HUB_ID_RE.test(s.hub || '') ? `&wph=${s.hub}` : '') + (ENV_TAG ? `&wpe=${ENV_TAG}` : '');
     }
 
     /*
@@ -323,7 +337,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, HUB_ID_RE, hubUrl, safeColor, isReaction, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
+    return { SERVER, ENV_TAG, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, HUB_ID_RE, hubUrl, safeColor, isReaction, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -352,7 +366,8 @@ const WP_US = (() => {
 const WP_SHIM = (() => {
     const SRC_BRIDGE = 'wp-bridge';   // bridge.js と同じ値
     const SRC_UI = 'wp-ui';
-    const KEY = 'wp:userscript';
+    // タブの印。環境ごとに分ける（本番用とテスト用を両方入れた端末で、互いの印を読まないように。2026-09-25）
+    const KEY = 'wp:userscript' + (WP_US.ENV_TAG ? ':' + WP_US.ENV_TAG : '');
     const PLAY_BLOCKED_MS = 3000;
     const IS_ANDROID = /Android/i.test(navigator.userAgent);
     // PC（Windows / Mac）。iPad は Mac を名乗るので、指で触れる画面かで除く（2026-09-14 PC のゲスト用）
@@ -372,6 +387,8 @@ const WP_SHIM = (() => {
         let q = new URLSearchParams(location.search);
         if (!q.get('wp') && location.hash.length > 1) q = new URLSearchParams(location.hash.slice(1));
         const room = WP_US.cleanRoom(q.get('wp'));
+        // 別の環境の招待（本番の招待をテスト用が拾う、など）なら何もしない
+        if (room && (q.get('wpe') || '') !== WP_US.ENV_TAG) return null;
         if (room) {
             const id = (PAGE_SERVICE === 'netflix' ? NETFLIX_WATCH : AMAZON_DETAIL).exec(location.pathname);
             const v = {
@@ -805,6 +822,7 @@ const WP_SHIM = (() => {
             <div class="fix" hidden><div class="fmsg"></div><button class="go" type="button">🔄 再生を立て直す</button><button class="later" type="button">このまま見る</button></div>
             <div class="top">
                 <button class="update" hidden></button>
+                <div class="update oldscript" hidden>⚠ 古い「Watch Party」が残っています。Userscripts アプリで「Watch Party」を削除してください（見られない・チャットが届かない原因になります）</div>
             </div>
             <a class="other" hidden></a>
             <button class="fab">💬<span class="badge" hidden></span></button>
@@ -835,6 +853,26 @@ const WP_SHIM = (() => {
             q('.update').hidden = false;
             q('.update').addEventListener('click', () => { q('.update').hidden = true; });
         }
+
+        /*
+         * **改名前の古い「Watch Party」（0.x）が同じページで動いていたら、画面を片付けて知らせる**（2026-09-25 友達の実機）。
+         * 9/20 の改名で @name が変わり、古い版が上書きされずに残った端末がある。古い版も同じ名前の置き場所
+         * （#wp-userscript）に画面を出し、サーバーに断られて届かないチャット欄が手前に居座っていた。
+         * 古い版の同期の部品も同じ合図（wp-ui）を受けて動くので、片付けるだけでは足りない＝削除してもらう知らせは消さない。
+         * 見分けは版の表示（v0.）で付ける。今の版どうし（テスト用と本番用）は片付けない。
+         */
+        let oldScriptSeen = false;
+        function sweepOldScript() {
+            for (const el of document.querySelectorAll('#wp-userscript')) {
+                if (el === host) continue;
+                const ver = el.shadowRoot && el.shadowRoot.querySelector('.ver');
+                if (ver && !/^v0\./.test(ver.textContent || '')) continue;
+                oldScriptSeen = true;
+                el.remove();
+            }
+            if (oldScriptSeen) q('.oldscript').hidden = false;
+        }
+        setInterval(sweepOldScript, 1000);
 
         // --- チャット -----------------------------------------------------------
         let open = false;
@@ -1387,10 +1425,48 @@ const WP_SHIM = (() => {
             socket.emit('ad-report', {
                 version: typeof __WP_VERSION__ === 'string' ? __WP_VERSION__ : '',
                 selfAd, texts, t: v.currentTime, d: v.duration, paused: v.paused,
-                ct: contentT, plan: planInfo, diag: playDiag, hostPlaying, gates: { otherVideo: Boolean(otherVideo), hostHold, hasHost }
+                ct: contentT, plan: planInfo, diag: playDiag, hostPlaying, gates: { otherVideo: Boolean(otherVideo), hostHold, hasHost },
+                prune: pruneInfo()
             });
         }
         if (PAGE_SERVICE === 'prime') setInterval(reportAds, 1000);
+
+        /** 広告消しが何を消したか（数だけ）と、このタブで開き直したか。1回目だけずれる件の切り分け用（2026-09-25） */
+        function pruneInfo() {
+            let s = null;
+            try { s = typeof globalThis.__wpPruneStats === 'function' ? globalThis.__wpPruneStats() : null; } catch { /* 無視 */ }
+            let reloaded = false;
+            try { reloaded = sessionStorage.getItem(AD_RELOAD_KEY) === target.room; } catch { /* 無視 */ }
+            const oldScript = oldScriptSeen;
+            return s ? { json: s.json, mpd: s.mpd, mpdPruned: s.mpdPruned, periods: s.periods, errors: s.errors, reloaded, oldScript }
+                : { reloaded, oldScript };
+        }
+
+        /*
+         * **広告の区間が動画に残っていたら、1回だけ開き直す**（2026-09-25 本番の実機）。
+         * 1回目の入室だけ、広告は流れないのに動画が本編より長く（8299.8 秒 / 本編 7906 秒）、ホストとずれた。
+         * 再生情報（広告の予定）は消せたが、配信リスト（広告の区間）を削るのが間に合わなかったとみられる。
+         * 2回目の入室では動画が本編と同じ長さになり、きちんと合った。それを自動でやる。
+         * 見ている途中で急に開き直さないよう、「▶ 再生をはじめる」の前か、開いてから 30 秒までに限る。1タブ・1ルームにつき1回だけ。
+         */
+        const AD_RELOAD_KEY = 'wp:adReload';
+        const AD_RELOAD_WINDOW_MS = 30000;
+        let adReloadDone = false;
+        function reloadIfAdsLeft() {
+            if (adReloadDone || PAGE_SERVICE !== 'prime') return;
+            if (gatePassed && Date.now() - openedAt > AD_RELOAD_WINDOW_MS) return;
+            if (typeof globalThis.__wpPruneStats !== 'function') return;   // 広告消しが入っていない
+            const v = mainVideo();
+            const full = planInfo ? Number(planInfo.full) : NaN;
+            if (!v || !Number.isFinite(full) || full < 300 || v.duration - full < 5) return;
+            adReloadDone = true;
+            try {
+                if (sessionStorage.getItem(AD_RELOAD_KEY) === target.room) return;
+                sessionStorage.setItem(AD_RELOAD_KEY, target.room);
+            } catch { return; }   // 印を残せないなら開き直さない（繰り返しを防ぐ）
+            location.reload();
+        }
+        if (PAGE_SERVICE === 'prime') setInterval(reloadIfAdsLeft, 1000);
         /*
          * キーボードが出入りしている間だけ、画面の更新に合わせて（毎フレーム）置き直す（2026-09-16 ユーザー要望）。
          * iPhone のキーボードは 0.3 秒ほどかけてせり上がり、その間ずっと画面がずれ続けるので、
