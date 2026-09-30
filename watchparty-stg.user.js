@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.23
+// @version      1.0.24
 // @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -49,7 +49,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.23";
+    const __WP_VERSION__ = "1.0.24";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -354,6 +354,243 @@ const WP_US = (() => {
     // Netflix は試験（2026-09-14）。@name は変えないこと（Userscripts が別のスクリプトとして二重に入れてしまう）。
     // テスト環境（WP_ENV=stg）だけは**わざと別の @name** にしてある。本番の版と並べて入れておけるようにするため
     if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
+
+    // ---- userscript/voice.js（ホストの副音声を聞く）----
+/**
+ * ホストの副音声（声）を聞く部品（2026-09-30）。招待ページ（hub.js）と再生タブ（shim.js）の両方で使う。
+ *
+ *   同期サーバー（voice-state）で「配信中」と知る → voice-pull で聞き口の申し込みをもらう
+ *   → 返事を voice-answer で返す → 声は Cloudflare Realtime から WebRTC で直接届く
+ *
+ * 安全の決まり（common.js）どおり、サーバーから届くのは「つなぎ方の書類（SDP）」と数だけで、
+ * 画面に出す文字やプログラムは受け取らない。こちらからは声を一切送らない（受け取り専用）。
+ *
+ * ブラウザは人が画面に触るまで音を出させないので、鳴らせなかったら blocked にして、
+ * 呼び出し側に「タップして聞く」を出してもらう（押されたら unlock()）。
+ */
+const WP_VOICE = (() => {
+    const ICE = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+    const OFF_KEY = 'wp:voiceOff';
+    const VOL_KEY = 'wp:voiceVol';
+    /*
+     * iPhone の Safari は <audio> の音量をページから変えさせない（volume を書いても 1 のまま）。
+     * iPhone だけは音声処理（Web Audio）の音量つまみを通して鳴らす。<audio> は消音で鳴らしたままにする
+     * （Chrome などは <audio> で鳴らしていない WebRTC の声を Web Audio に渡しても無音になるため、どの端末でも <audio> は使う）
+     */
+    const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+    const SDP_MAX = 12000;
+
+    function cleanSdp(v, type) {
+        return v && typeof v === 'object' && v.type === type && typeof v.sdp === 'string' &&
+            v.sdp.length <= SDP_MAX && v.sdp.startsWith('v=0') ? { type, sdp: v.sdp } : null;
+    }
+
+    /**
+     * @param socket socket.io の接続
+     * @param opts.mount 音を鳴らす <audio> を置く場所
+     * @param opts.onChange 状態が変わったら呼ばれる
+     */
+    function create(socket, opts) {
+        const onChange = typeof opts.onChange === 'function' ? opts.onChange : () => {};
+        const audio = document.createElement('audio');
+        audio.autoplay = true;
+        audio.setAttribute('playsinline', '');
+        audio.hidden = true;
+        (opts.mount || document.body || document.documentElement).appendChild(audio);
+
+        let live = false;       // ホストが副音声しているか（サーバーの知らせ）
+        let gen = 0;            // 副音声の番号。ホストが流し直すと増える＝聞き直す
+        let wanted = opts.wanted !== false;   // この画面で鳴らしてよいか（呼び出し側が決める）
+        let userOff = (() => { try { return sessionStorage.getItem(OFF_KEY) === '1'; } catch { return false; } })();
+        let pc = null;
+        let pulledGen = -1;
+        let pulling = false;
+        let blocked = false;    // 鳴らそうとしたがブラウザに止められた（タップ待ち）
+        let playing = false;
+        let hasVoice = false;   // 声の流れが届いているか（unlock で鳴らす空の流れと区別する）
+        let retryTimer = null;
+        let retryDelay = 5000;
+        // 副音声だけの音量（0〜1）。映画の音量とは別に、聞く人が決める。次に開いたときも同じ大きさ
+        let volume = (() => {
+            try { const v = Number(localStorage.getItem(VOL_KEY)); return localStorage.getItem(VOL_KEY) !== null && v >= 0 && v <= 1 ? v : 1; }
+            catch { return 1; }
+        })();
+        let ctx = null;         // iPhone だけ: 音声処理の入れ物と音量つまみ
+        let gain = null;
+        let gainStream = null;
+
+        /** いまの音量を当てる（iPhone は音量つまみ、ほかは <audio> の volume） */
+        function applyVolume() {
+            if (!IS_IOS) { audio.muted = false; audio.volume = volume; return; }
+            audio.muted = true;
+            try {
+                if (!ctx) {
+                    ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    gain = ctx.createGain();
+                    gain.connect(ctx.destination);
+                }
+                if (hasVoice && gainStream !== audio.srcObject) {
+                    ctx.createMediaStreamSource(audio.srcObject).connect(gain);
+                    gainStream = audio.srcObject;
+                }
+                gain.gain.value = volume;
+                if (ctx.state !== 'running') ctx.resume().catch(() => {});
+            } catch { audio.muted = false; }   // 音声処理が使えなければ、音量は変えられないが声は出す
+        }
+
+        const active = () => live && wanted && !userOff;
+
+        function ask(event, payload) {
+            return new Promise((resolve) => {
+                if (!socket.connected) return resolve(null);
+                socket.timeout(20000).emit(event, payload, (err, res) => resolve(err ? null : res));
+            });
+        }
+
+        function close() {
+            if (pc) {
+                pc.ontrack = null;
+                pc.onconnectionstatechange = null;
+                pc.close();
+                pc = null;
+            }
+            pulledGen = -1;
+            playing = false;
+            hasVoice = false;
+            gainStream = null;
+            audio.srcObject = null;
+        }
+
+        function retryLater() {
+            clearTimeout(retryTimer);
+            if (!active()) return;
+            retryTimer = setTimeout(sync, retryDelay);
+            retryDelay = Math.min(retryDelay * 2, 60000);
+        }
+
+        function tryPlay() {
+            applyVolume();
+            const p = audio.play();
+            if (!p || typeof p.then !== 'function') return;
+            p.then(() => { blocked = false; playing = true; onChange(); })
+                .catch(() => { blocked = true; playing = false; onChange(); });
+        }
+
+        async function pull() {
+            if (pulling) return;
+            pulling = true;
+            close();
+            try {
+                const res = await ask('voice-pull', {});
+                const offer = res && cleanSdp(res.offer, 'offer');
+                if (!offer) throw new Error((res && res.error) || 'timeout');
+                if (!active()) return;
+                const p = new RTCPeerConnection({ iceServers: ICE, bundlePolicy: 'max-bundle' });
+                pc = p;
+                pulledGen = Number.isInteger(res.gen) ? res.gen : gen;
+                p.ontrack = (ev) => {
+                    audio.srcObject = (ev.streams && ev.streams[0]) || new MediaStream([ev.track]);
+                    hasVoice = true;
+                    tryPlay();
+                };
+                p.onconnectionstatechange = () => {
+                    if (pc !== p) return;
+                    if (p.connectionState === 'connected') retryDelay = 5000;
+                    if (p.connectionState === 'failed') { close(); onChange(); retryLater(); }
+                };
+                await p.setRemoteDescription(offer);
+                await p.setLocalDescription(await p.createAnswer());
+                const ok = await ask('voice-answer', { answer: { type: 'answer', sdp: p.localDescription.sdp } });
+                if (!ok || ok.ok !== true) throw new Error((ok && ok.error) || 'timeout');
+            } catch (e) {
+                close();
+                retryLater();
+            } finally {
+                pulling = false;
+                onChange();
+                // 待っている間に副音声が流し直された
+                if (active() && pc && pulledGen !== gen) sync();
+            }
+        }
+
+        function sync() {
+            clearTimeout(retryTimer);
+            if (!active()) { close(); onChange(); return; }
+            if (pc && pulledGen === gen) return;
+            pull();
+        }
+
+        socket.on('voice-state', (s) => {
+            if (!s || typeof s !== 'object') return;
+            live = s.on === true;
+            const g = Number.isInteger(s.gen) ? s.gen : 0;
+            if (g !== gen) retryDelay = 5000;
+            gen = g;
+            sync();
+        });
+        // 切れたら止める。つなぎ直してルームに入り直すと、サーバーが今の状態（voice-state）を送り直す
+        socket.on('disconnect', () => { live = false; sync(); });
+
+        return {
+            /** 人が画面に触った（その中で呼ぶ）。止められていた音を鳴らす */
+            unlock() {
+                // iPhone は音声処理の入れ物も、人が触ったときにしか動き出さない
+                if (IS_IOS) applyVolume();
+                if (hasVoice) { tryPlay(); return; }
+                // まだ声が届いていなくても、触った瞬間に一度鳴らしておくと、あとで届いた声を鳴らせる（iPhone）
+                try {
+                    audio.srcObject = new MediaStream();
+                    const p = audio.play();
+                    if (p && p.catch) p.catch(() => {});
+                } catch { /* 古いブラウザ */ }
+            },
+            /** この画面で鳴らしてよいか（招待ページは YouTube を見ている間だけ、など） */
+            setWanted(v) {
+                if (wanted === Boolean(v)) return;
+                wanted = Boolean(v);
+                sync();
+            },
+            /** 聞く人が自分で止める・また聞く */
+            setUserOff(v) {
+                userOff = Boolean(v);
+                try { sessionStorage.setItem(OFF_KEY, userOff ? '1' : '0'); } catch { /* 使えない設定 */ }
+                sync();
+                if (!userOff) this.unlock();
+            },
+            /** 副音声だけの音量（0〜1）。聞く人が決める */
+            setVolume(v) {
+                const n = Number(v);
+                if (!Number.isFinite(n)) return;
+                volume = Math.max(0, Math.min(1, n));
+                try { localStorage.setItem(VOL_KEY, String(volume)); } catch { /* 使えない設定 */ }
+                if (hasVoice || IS_IOS) applyVolume();
+            },
+            /** もう使わない（招待ページはつなぎ直すたびに作り直す） */
+            destroy() {
+                clearTimeout(retryTimer);
+                live = false;
+                close();
+                audio.remove();
+                if (ctx) ctx.close().catch(() => {});
+            },
+            state() {
+                return {
+                    live,
+                    userOff,
+                    active: active(),
+                    connected: Boolean(pc && pc.connectionState === 'connected'),
+                    playing,
+                    volume,
+                    blocked: active() && blocked
+                };
+            }
+        };
+    }
+
+    return { create };
+})();
+
 
     // ---- userscript/shim.js ----
 /**
@@ -728,6 +965,17 @@ const WP_SHIM = (() => {
                          background: rgba(20,20,26,.88); border: 2px solid #ffcc33; border-radius: 16px; padding: 16px 22px;
                          box-shadow: 0 4px 18px rgba(0,0,0,.5); max-width: min(90vw, 460px); }
                 .clock small { display: block; font-size: 14px; font-weight: 600; color: #d8d8e0; margin-top: 4px; }
+                /* ホストの副音声（2026-09-30）。ブラウザに音を止められているときだけ出す。どこを触っても鳴り始める */
+                .vtap { pointer-events: auto; border: 0; cursor: pointer; font: 700 15px/1.4 -apple-system, system-ui, sans-serif;
+                        color: #fff; background: #d6336c; border-radius: 999px; padding: 10px 16px; box-shadow: 0 2px 10px rgba(0,0,0,.4); }
+                /* 副音声の行（チャット欄の上）: オン／オフと、副音声だけの音量（映画の音量とは別。2026-09-30 ユーザー要望） */
+                .vrow { flex: none; display: flex; align-items: center; gap: 8px; }
+                .vbtn { flex: none; border: 0; border-radius: 8px; background: rgba(58,58,70,.6); color: #fff; min-height: 36px; padding: 0 10px;
+                        font: 600 13px/1 -apple-system, system-ui, sans-serif; cursor: pointer; }
+                .vbtn[data-off="1"] { opacity: .6; }
+                .vvol { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; accent-color: #d6336c; height: 32px; }
+                .vvol:disabled { opacity: .35; }
+                .panel[data-tight="1"] .vrow { display: none; }
                 .update { pointer-events: auto; border: 0; text-align: left; max-width: 100%;
                           font: 600 14px/1.5 -apple-system, system-ui, sans-serif; color: #1a1300;
                           background: #ffcc33; border-radius: 10px; padding: 10px 12px; }
@@ -830,6 +1078,7 @@ const WP_SHIM = (() => {
             <div class="clock adwait" hidden>⏸ ホストが広告を見ています<small>終わると自動で再開します（止まっているのは故障ではありません）</small></div>
             <div class="fix" hidden><div class="fmsg"></div><button class="go" type="button">🔄 再生を立て直す</button><button class="later" type="button">このまま見る</button></div>
             <div class="top">
+                <button class="vtap" type="button" hidden>🔊 タップしてホストの副音声を聞く</button>
                 <button class="update" hidden></button>
                 <div class="update oldscript" hidden>⚠ 古い「Watch Party」が残っています。Userscripts アプリで「Watch Party」を削除してください（見られない・チャットが届かない原因になります）</div>
             </div>
@@ -838,6 +1087,7 @@ const WP_SHIM = (() => {
             <div class="panel" hidden>
                 <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="refix" title="再生がおかしいときに立て直す" aria-label="再生を立て直す">🔄</button><button class="pop" title="チャットを別の窓で開く" aria-label="チャットを別の窓で開く" hidden>⧉</button><button class="close" aria-label="閉じる">✕</button></div>
                 <div class="notice" hidden></div>
+                <div class="vrow" hidden><button class="vbtn" type="button"></button><input class="vvol" type="range" min="0" max="100" step="5" aria-label="ホストの副音声の音量"></div>
                 <div class="msgs"></div>
                 <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
             </div>`;
@@ -847,6 +1097,37 @@ const WP_SHIM = (() => {
             host.addEventListener(t, (e) => e.stopPropagation());
         }
         const q = (s) => root.querySelector(s);
+
+        /*
+         * ホストの副音声（2026-09-30）。再生タブは映像を見ている場所なので、副音声中は常に鳴らす。
+         * 音はブラウザに止められることがあるので、止められたら「タップして聞く」を出し、どこを触っても鳴り始めるようにする
+         */
+        const voice = WP_VOICE.create(socket, { mount: root, onChange: () => render() });
+        /*
+         * 画面の描き直し（毎秒）のたびに呼ばれるので、**状態が変わったときだけ**書き換える。
+         * 再生中のページで毎秒 DOM を触ると、ゲストの再生が遅れたことがある（placePanel の件）
+         */
+        let voiceSig = '';
+        function renderVoice() {
+            const v = voice.state();
+            const sig = [v.live, v.userOff, v.blocked, v.volume, q('.gate').hidden].join('|');
+            if (sig === voiceSig) return;
+            voiceSig = sig;
+            q('.vrow').hidden = !v.live;
+            q('.vbtn').dataset.off = v.userOff ? '1' : '';
+            q('.vbtn').textContent = v.userOff ? '🔇 副音声オフ' : '🎙 副音声オン';
+            q('.vbtn').title = v.userOff ? '押すとホストの副音声を聞く' : '押すとホストの副音声を止める（自分だけ）';
+            q('.vvol').disabled = v.userOff;
+            // 動かしている最中は書き換えない（指の下でつまみが跳ねないように）
+            if (root.activeElement !== q('.vvol')) q('.vvol').value = String(Math.round(v.volume * 100));
+            q('.vtap').hidden = !v.blocked || !q('.gate').hidden;
+        }
+        q('.vbtn').addEventListener('click', () => voice.setUserOff(!voice.state().userOff));
+        q('.vvol').addEventListener('input', () => voice.setVolume(Number(q('.vvol').value) / 100));
+        q('.vtap').addEventListener('click', () => voice.unlock());
+        for (const type of ['pointerdown', 'touchend', 'keydown']) {
+            window.addEventListener(type, () => { if (voice.state().blocked) voice.unlock(); }, true);
+        }
         q('.ver').textContent = typeof __WP_VERSION__ === 'string' ? 'v' + __WP_VERSION__ : '';
 
         /*
@@ -918,7 +1199,7 @@ const WP_SHIM = (() => {
             }, { passive: true });
             if (globalThis.ResizeObserver) new ResizeObserver(() => keepLatest()).observe(box);
             // 打ち始め・打ち終わり（キーボードの出し入れ）でも置き直して、最新を見せる
-            const input = q('input');
+            const input = q('form input');
             for (const type of ['focus', 'blur']) {
                 input.addEventListener(type, () => {
                     /*
@@ -1019,7 +1300,7 @@ const WP_SHIM = (() => {
              * これが変わったら置き直す。**入力欄に別のイベントを足すと、そこで例外が出たときスクリプト全体が止まる**
              * （2026-09-20 に実際に止めた）ので、毎秒のこの点検に混ぜるだけにしてある
              */
-            const composingNow = !IS_DESKTOP && root.activeElement === q('input');
+            const composingNow = !IS_DESKTOP && root.activeElement === q('form input');
             const baseSig = [window.innerWidth, window.innerHeight, vv ? Math.round(vv.height) : 0, vv ? Math.round(vv.offsetTop) : 0,
                 keyboardShift(),   // キーボードで画面がずれたら置き直す（見た目を変えないため）
                 r ? Math.round(r.top) : -1, r ? Math.round(r.height) : -1, video ? video.videoHeight : 0, open].join('|');
@@ -1236,7 +1517,7 @@ const WP_SHIM = (() => {
         let userScrolledAt = 0;
         window.addEventListener('touchmove', () => { userScrolledAt = Date.now(); }, { passive: true, capture: true });
         function scrollVideoToTop(video) {
-            if (root.activeElement === q('input') || Date.now() - userScrolledAt < 4000 || Date.now() - lastAutoScroll < 1500) return;
+            if (root.activeElement === q('form input') || Date.now() - userScrolledAt < 4000 || Date.now() - lastAutoScroll < 1500) return;
             const r = contentRect(video);
             if (Math.abs(r.top) <= 4) return;
             const se = document.scrollingElement || document.documentElement;
@@ -1279,7 +1560,7 @@ const WP_SHIM = (() => {
              * キーボードで下が隠れても、入力欄と最新の発言は見えたままになる。
              * 動かしていた頃は、映像の置き場所まで一緒に動いて崩れていた
              */
-            const composing = !IS_DESKTOP && root.activeElement === q('input');
+            const composing = !IS_DESKTOP && root.activeElement === q('form input');
             if (video && !panelOnly) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop());
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
@@ -1601,11 +1882,11 @@ const WP_SHIM = (() => {
          * ずれが最初から変わらないので「落ち着いた」と判定され、250ms 後に1回だけ映像を合わせ直して終わる。
          */
         for (const ev of ['focus', 'blur']) {
-            q('input').addEventListener(ev, () => { placePanel(true); followKeyboard(); });
+            q('form input').addEventListener(ev, () => { placePanel(true); followKeyboard(); });
         }
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
-            const input = q('input');
+            const input = q('form input');
             const text = input.value.trim();
             if (!text || !connected) return;
             socket.emit('send-message', { message: text });
@@ -1724,6 +2005,7 @@ const WP_SHIM = (() => {
             setTimeout(clickPlayOnce, 3000);
             setTimeout(clickPlayOnce, 8000);
             applyVolume(true);
+            voice.unlock();   // この1回のタップで、ホストの副音声の音も出せるようにする
             const v = mainVideo();
             if (v && v.paused && hostPlaying) v.play().catch(() => {});
             if (connected) socket.emit('request-sync');
@@ -1877,6 +2159,9 @@ const WP_SHIM = (() => {
                     : '合わせています。画面を1回タップしてください（広告の時間を確かめます）')
                 : adLagSec !== null ? `⏱ 広告のぶん遅れて視聴中（${fmtLag(adLagSec)}）`
                 : 'ホストに自動で合わせています';
+            // ホストの副音声が聞こえているときは印を付ける
+            if (voice.state().playing && !voice.state().userOff) q('.text').textContent = '🎙 ' + q('.text').textContent;
+            renderVoice();
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
             q('.hstate').style.color = connected && hasHost && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
