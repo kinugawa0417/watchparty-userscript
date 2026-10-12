@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.24
-// @description  友だちと一緒に Prime Video / Netflix を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
+// @version      1.0.25
+// @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
 // @match        https://www.netflix.com/*
+// @match        https://www.youtube.com/*
+// @match        https://m.youtube.com/*
 // @noframes
 // @run-at       document-start
 // @inject-into  page
@@ -14,12 +16,14 @@
 
 (function () {
     'use strict';
+    // 動くサイト（@match と同じ）。YouTube（www / m）は 2026-10-12、ログインした状態で見たい人のために足した
+    const __WP_SITES__ = ['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com', 'www.youtube.com', 'm.youtube.com'];
     /*
      * 招待のリンク（?wp= / #wp=）から開いたタブでなければ、ここで終わる。通信の部品も何も読み込まない（2026-09-14）。
      * Android の Firefox で、このスクリプトを入れていると Amazon の再生が始まらなくなった（スクリプトを切ると再生できた）。
      * 原因の特定の前に、ふだんの Amazon のページには一切触れない形にした。
      */
-    if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
+    if (!__WP_SITES__.includes(location.hostname)) return;
     // 一番外のページだけで動く（@noframes と同じ。読み込みの最初に入れるようにしたので、念のため自分でも確かめる）
     try { if (window.top !== window) return; } catch { return; }
     /*
@@ -49,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.24";
+    const __WP_VERSION__ = "1.0.25";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -260,6 +264,25 @@ const WP_US = (() => {
         },
 
         /**
+         * YouTube を **YouTube のページそのもの**で開く形（2026-10-12 ユーザー要望: ログインした状態で見たい）。
+         * 招待ページの中の埋め込みプレイヤーはログインできないので、メンバー限定の動画や Premium（広告なし）は
+         * YouTube のページで見るしかない。そのページでスクリプトがチャットを出し、ホストに自動で合わせる（Prime と同じ）。
+         *   - スマホは m.youtube.com。**noapp=1 を付けると iPhone が YouTube アプリへ回さない**
+         *     （YouTube 公式の apple-app-site-association に「noapp の付いたアドレスはアプリで開かない」とある）
+         *   - YouTube は読み込みのあと、知らない指定（wp= など）をアドレスから消す。スクリプトは読み込みの最初に読んで
+         *     タブに覚えるので困らない。# の後ろにも付けるのは Prime / Netflix と同じ（ログインへ回されたとき用）
+         * 時刻は付けない（合わせるのはスクリプトの仕事）。
+         */
+        youtubeWeb(v, room, name, android, script, mobile) {
+            if (v.service !== 'youtube') return null;
+            const q = `wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
+            const path = mobile || android
+                ? `m.youtube.com/watch?v=${enc(v.contentId)}&noapp=1&${q}#${q}`
+                : `www.youtube.com/watch?v=${enc(v.contentId)}&${q}#${q}`;
+            return android ? urls.firefox(`https://${path}`) : `https://${path}`;
+        },
+
+        /**
          * Android で、決まったアドレスを Firefox で開く形（intent://）。
          * href は https:// で始まる、このファイルで組み立てた決まったアドレスだけを渡すこと。
          */
@@ -350,10 +373,14 @@ const WP_US = (() => {
 })();
 
 
-    // amazon.co.jp と、Prime Video だけ契約の人の primevideo.com
-    // Netflix は試験（2026-09-14）。@name は変えないこと（Userscripts が別のスクリプトとして二重に入れてしまう）。
-    // テスト環境（WP_ENV=stg）だけは**わざと別の @name** にしてある。本番の版と並べて入れておけるようにするため
-    if (!['www.amazon.co.jp', 'www.primevideo.com', 'www.netflix.com'].includes(location.hostname)) return;
+    // amazon.co.jp と、Prime Video だけ契約の人の primevideo.com。Netflix は PC だけ（2026-09-14）。YouTube は 2026-10-12。
+    // **@name は変えないこと**（Userscripts / Violentmonkey が別のスクリプトとして二重に入れてしまう）。
+    // **テスト環境（WP_ENV=stg）も同じ @name / @namespace**（2026-09-25。入れれば上書きされ、2本並ばない。tools/unit.js が確かめる）
+    /*
+     * YouTube では、動画のページ（/watch）を開いたときだけ動く。招待から開いたタブでそのまま YouTube のトップや
+     * 検索を読み込んだときに、待機画面でページを覆わないように。
+     */
+    if (location.hostname.endsWith('youtube.com') && location.pathname !== '/watch') return;
 
     // ---- userscript/voice.js（ホストの副音声を聞く）----
 /**
@@ -624,8 +651,51 @@ const WP_SHIM = (() => {
     const SYNC_TYPES = new Set(['play', 'pause', 'seek', 'tick']);
 
     // このページのサービス。Netflix（試験・2026-09-14）と Prime（amazon.co.jp / primevideo.com）
-    const PAGE_SERVICE = location.hostname === 'www.netflix.com' ? 'netflix' : 'prime';
+    // YouTube（2026-10-12）は、ログインした状態で見たい人が YouTube のページそのもので見るとき
+    const PAGE_SERVICE = location.hostname === 'www.netflix.com' ? 'netflix'
+        : /^(www|m)\.youtube\.com$/.test(location.hostname) ? 'youtube' : 'prime';
+    const IS_YOUTUBE = PAGE_SERVICE === 'youtube';
     const NETFLIX_WATCH = /\/watch\/(\d{4,12})(?=[/?#]|$)/;
+    const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
+    /** いま開いている YouTube の動画（/watch?v=）。YouTube はページを読み込み直さずに動画を替えるので、そのつど読む */
+    function youtubeIdNow() {
+        if (location.pathname !== '/watch') return null;
+        const id = new URLSearchParams(location.search).get('v') || '';
+        return YOUTUBE_ID.test(id) ? id : null;
+    }
+    /** このページの作品 ID（アドレスから） */
+    function pageContentId() {
+        if (IS_YOUTUBE) return youtubeIdNow();
+        const id = (PAGE_SERVICE === 'netflix' ? NETFLIX_WATCH : AMAZON_DETAIL).exec(location.pathname);
+        return id ? id[1] : null;
+    }
+    /*
+     * YouTube のページは、文字列から HTML を作ること（innerHTML）を禁じている（Trusted Types）。
+     * そのままだと画面の骨組みを入れるところで止まるので、ブラウザの決まりどおり「方針」を通す。
+     * 通すのはこのファイルに書いた決まった骨組みだけ（サーバーから来た文字は今までどおり textContent でしか入れない）。
+     */
+    function fixedHtml(html) {
+        const tt = globalThis.trustedTypes;
+        if (!tt || typeof tt.createPolicy !== 'function') return html;
+        try {
+            fixedHtml.policy = fixedHtml.policy || tt.createPolicy('wp-userscript', { createHTML: (s) => s });
+            return fixedHtml.policy.createHTML(html);
+        } catch { return html; }
+    }
+    /**
+     * YouTube は、キーを押すと動画を操作する（k＝停止、f＝全画面、数字＝その位置へ）。チャット欄は影の中（shadow DOM）にあり、
+     * YouTube からは入力欄に見えないので、チャットを打つと動画が止まったり飛んだりする。
+     * チャット欄で押したキーを、YouTube が聞く前（読み込みの最初・一番外）で止める。文字は今までどおり入る。
+     */
+    function guardKeys() {
+        if (!IS_YOUTUBE) return;
+        for (const type of ['keydown', 'keyup', 'keypress']) {
+            window.addEventListener(type, (e) => {
+                const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+                if (path.some(el => el && el.id === 'wp-userscript')) e.stopImmediatePropagation();
+            }, true);
+        }
+    }
 
     /** このタブが見るルーム。無ければ null（何もしない） */
     function readRoom() {
@@ -636,11 +706,10 @@ const WP_SHIM = (() => {
         // 別の環境の招待（本番の招待をテスト用が拾う、など）なら何もしない
         if (room && (q.get('wpe') || '') !== WP_US.ENV_TAG) return null;
         if (room) {
-            const id = (PAGE_SERVICE === 'netflix' ? NETFLIX_WATCH : AMAZON_DETAIL).exec(location.pathname);
             const v = {
                 room,
                 name: (q.get('wpn') || '').slice(0, 20) || 'スマホ',
-                contentId: id ? id[1] : null,
+                contentId: pageContentId(),
                 // 友達の画面に入っている最新のスクリプトの版と公開日（古ければ「更新されました」を出す）
                 latest: WP_US.VERSION_RE.test(q.get('wpv') || '') ? q.get('wpv') : null,
                 latestDate: WP_US.DATE_RE.test(q.get('wpd') || '') ? q.get('wpd') : null,
@@ -731,6 +800,8 @@ const WP_SHIM = (() => {
         /** ホストの作品（cleanVideo 済み）がこのページの作品と同じか */
         function sameTitle(v) {
             if (v.service !== PAGE_SERVICE) return false;
+            // YouTube はページを読み込み直さずに動画が替わるので、最初に覚えた値ではなく、いまのアドレスと比べる
+            if (IS_YOUTUBE) return v.contentId === youtubeIdNow();
             if (!target.contentId) return true;   // このページの作品が分からないときは止めない
             // primevideo.com では GTI（Amazon 内部の作品 ID）で開くので、ホストの GTI とも比べる
             return v.contentId === target.contentId || (Boolean(v.appId) && v.appId === target.contentId);
@@ -920,7 +991,7 @@ const WP_SHIM = (() => {
         host.id = 'wp-userscript';
         host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
         const root = host.attachShadow({ mode: 'open' });
-        root.innerHTML = `
+        root.innerHTML = fixedHtml(`
             <style>
                 :host { all: initial; }
                 * { box-sizing: border-box; font-family: -apple-system, system-ui, "Hiragino Sans", sans-serif; }
@@ -1001,6 +1072,7 @@ const WP_SHIM = (() => {
                 .panel[data-place="side"] {
                          background: rgba(0,0,0,.18); border-color: rgba(255,255,255,.12);
                          text-shadow: 0 0 3px #000, 0 1px 2px #000, 0 0 6px rgba(0,0,0,.8); }
+                .panel[data-place="side"][data-solid="1"] { background: rgba(15,15,19,.96); border-color: #2c2c36; text-shadow: none; }
                 .panel[data-place="side"] .phead { color: #e0e0e6; font-size: 15px; }
                 /* PC の大きな画面では字が小さく見えたので大きめに（2026-09-14 ユーザー要望） */
                 .panel[data-place="side"] .msgs { font-size: 17px; }
@@ -1090,7 +1162,7 @@ const WP_SHIM = (() => {
                 <div class="vrow" hidden><button class="vbtn" type="button"></button><input class="vvol" type="range" min="0" max="100" step="5" aria-label="ホストの副音声の音量"></div>
                 <div class="msgs"></div>
                 <form><input maxlength="500" placeholder="メッセージ" autocomplete="off"><button class="send" type="submit">送信</button></form>
-            </div>`;
+            </div>`);
         (document.body || document.documentElement).appendChild(host);
         // Amazon のページの操作（タップで再生・キーで早送りなど）に取られないようにする
         for (const t of ['click', 'touchstart', 'touchend', 'pointerdown', 'pointerup', 'keydown', 'keyup', 'keypress']) {
@@ -1272,18 +1344,25 @@ const WP_SHIM = (() => {
              * キーボードが動いている間（following）は触らない。動いている最中に映像を書き換えると、
              * プレイヤーが描き直し・読み込み直しをして再生が乱れる（2026-09-16 ユーザー指摘）
              */
-            if (video && !following) fitPlayerToVideo(video, playerShown && portrait, visibleTop());
+            /*
+             * **YouTube では、プレイヤーにもページにも手を出さない**（2026-10-12）。
+             * YouTube のスマホ向けページは、もともと映像が一番上・その下にページ、という並びなので動かす必要がない。
+             * ログイン・メンバー登録・コメントなど YouTube 自身のボタンも使うので、隠したり触れなくしたりもしない。
+             */
+            if (video && !following && !IS_YOUTUBE) fitPlayerToVideo(video, playerShown && portrait, visibleTop());
             // 一度でも再生が始まったか（ゲストに要らないボタンを隠すのは、始まってから）
             if (playerShown && video.currentTime > 0.5 && !video.paused) startedOnce = true;
-            hideGuestControls(playerShown ? video : null);
-            sizeCaptions(playerShown && portrait ? video : null);
+            if (!IS_YOUTUBE) {
+                hideGuestControls(playerShown ? video : null);
+                sizeCaptions(playerShown && portrait ? video : null);
+            }
             if (playerShown && !open && !userClosed) setOpen(true);
             /*
              * 2026-09-16 実機（Android）: プレイヤーの箱を縮めたことで、その下のページ（「続きを観る」など）が見えて押せてしまった。
              * これまで Android では触らない方針だったが、箱を縮める今の作りでは隠す必要があるので、Android でも隠す
              */
-            if (!IS_DESKTOP) tidyAround(playerShown && portrait ? video : null);
-            if (IS_ANDROID && playerShown && portrait) scrollVideoToTop(video);
+            if (!IS_DESKTOP && !IS_YOUTUBE) tidyAround(playerShown && portrait ? video : null);
+            if (IS_ANDROID && !IS_YOUTUBE && playerShown && portrait) scrollVideoToTop(video);
             /*
              * 置き場所の計算し直しは、画面の大きさや映像の位置が変わったときだけ（2026-09-14）。
              * チャット欄を開いたまま毎秒計算し直すと、本物の Prime でゲストが 3〜4 秒遅れた（止めると 0.7 秒）
@@ -1561,7 +1640,7 @@ const WP_SHIM = (() => {
              * 動かしていた頃は、映像の置き場所まで一緒に動いて崩れていた
              */
             const composing = !IS_DESKTOP && root.activeElement === q('form input');
-            if (video && !panelOnly) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop());
+            if (video && !panelOnly && !IS_YOUTUBE) fitPlayerToVideo(video, portrait && Boolean(video.videoHeight), visibleTop());
             const r = video ? contentRect(video) : null;
             const below = r ? Math.max(0, Math.round(r.bottom - viewTop)) : 0;
             const room = viewH - below - 16;
@@ -1576,6 +1655,8 @@ const WP_SHIM = (() => {
                 panel.style.left = 'auto';
                 panel.style.width = '360px';
                 panel.dataset.place = 'side';
+                // YouTube は右側が白っぽいおすすめの一覧なので、透かすと字が読めない。透かさない
+                panel.dataset.solid = IS_YOUTUBE ? '1' : '';
             } else if (r && r.height > 0 && room >= MIN_PANEL_PX) {
                 panel.style.top = `${kb + viewTop + below + 8}px`;
                 panel.style.bottom = 'auto';
@@ -1944,6 +2025,17 @@ const WP_SHIM = (() => {
         /** 音を出せる状態にする（人が触ったあとに呼ぶこと。触る前に呼んでも効かない） */
         function applyVolume(force = false) {
             let done = false;
+            if (IS_YOUTUBE) {
+                // YouTube は自分で消音の状態を持っている（スマホは消音で始まり「ミュートを解除」が出る）。プレイヤーの口から解く
+                const p = youtubePlayer();
+                try {
+                    if (p && typeof p.unMute === 'function' && (force || p.isMuted())) { p.unMute(); done = true; }
+                    if (p && typeof p.setVolume === 'function' && (force || p.getVolume() < 99)) { p.setVolume(100); done = true; }
+                } catch { /* 準備前 */ }
+                const v = mainVideo();
+                try { if (v && (force || v.muted)) { v.muted = false; done = true; } } catch { /* 受け付けないことがある */ }
+                return done;
+            }
             for (const v of document.querySelectorAll('video')) {
                 if (!Number.isFinite(v.duration) || v.duration < 300) continue;   // 予告などの短い動画は触らない
                 try {
@@ -1980,6 +2072,8 @@ const WP_SHIM = (() => {
          * （本編の上で押すと、最初から再生し直しになることがある）
          */
         function clickPlayOnce() {
+            // YouTube は開けばプレイヤーが出る（代わりに押すボタンは無い。「再生」という名前の別のボタンを押さないように）
+            if (IS_YOUTUBE) return false;
             if (playerReady || mainVideo()) return false;
             const btn = findPlayButton();
             if (!btn) return false;
@@ -2007,7 +2101,8 @@ const WP_SHIM = (() => {
             applyVolume(true);
             voice.unlock();   // この1回のタップで、ホストの副音声の音も出せるようにする
             const v = mainVideo();
-            if (v && v.paused && hostPlaying) v.play().catch(() => {});
+            if (IS_YOUTUBE && hostPlaying) { try { youtubePlayer()?.playVideo(); } catch { /* 準備前 */ } }
+            else if (v && v.paused && hostPlaying) v.play().catch(() => {});
             if (connected) socket.emit('request-sync');
             q('.gate').hidden = true;
             render();
@@ -2025,12 +2120,22 @@ const WP_SHIM = (() => {
         let blockedSince = 0;
         q('.tap').addEventListener('click', () => {
             const v = mainVideo();
-            if (v) v.play().catch(() => {});
+            if (IS_YOUTUBE) { applyVolume(true); try { youtubePlayer()?.playVideo(); } catch { /* 準備前 */ } }
+            else if (v) v.play().catch(() => {});
             socket.emit('request-sync');
             blockedSince = 0;
             render();
         });
         setInterval(() => {
+            /*
+             * YouTube はページを読み込み直さずに別の動画へ移れる（おすすめを押す・次の動画が自動で始まる）。
+             * ホストと違う動画になったら合わせるのを止めて「ホストの作品を開く」を出し、戻ってきたら合わせ直す
+             */
+            if (IS_YOUTUBE && hostVideo) {
+                const was = Boolean(otherVideo);
+                checkTitle(hostVideo);
+                if (was && !otherVideo && connected) socket.emit('request-sync');
+            }
             const v = mainVideo();
             const stuck = v && hostPlaying && !selfAd && !otherVideo && !hostHold && v.paused;
             // Android でまだ画面に触っていないなら、止まっていなくてもすぐ「タップして再生」を出す
@@ -2092,6 +2197,7 @@ const WP_SHIM = (() => {
         /** 立て直すときに開くアドレス（ホストのいまの作品を、今と同じサイトで開く） */
         function reopenUrl(v) {
             const script = { version: target.latest, date: target.latestDate, hub: target.hub };
+            if (IS_YOUTUBE) return v ? U.urls.youtubeWeb(v, target.room, target.name, false, script, location.hostname === 'm.youtube.com') : null;
             const open = PAGE_SERVICE === 'netflix' ? U.urls.netflixWeb
                 : location.hostname === 'www.primevideo.com' ? U.urls.primeVideoWeb : U.urls.primeWeb;
             return v ? open(v, target.room, target.name, false, script) : null;
@@ -2279,7 +2385,7 @@ const WP_SHIM = (() => {
                     const a = document.createElement('button');
                     a.type = 'button';
                     a.className = 'gescape';
-                    a.textContent = 'Amazon の画面を見る';
+                    a.textContent = ({ netflix: 'Netflix', youtube: 'YouTube' }[PAGE_SERVICE] || 'Amazon') + ' の画面を見る';
                     a.style.cssText = 'margin-left:6px;border:0;background:transparent;color:#7aa2ff;font:inherit;text-decoration:underline;cursor:pointer;';
                     note.appendChild(a);
                 }
@@ -2447,13 +2553,24 @@ const WP_SHIM = (() => {
         return best;
     }
 
+    /** YouTube のプレイヤー（操作の口が生えている要素）。無ければ null */
+    function youtubePlayer() {
+        const p = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        return p && typeof p.getPlayerState === 'function' ? p : null;
+    }
+
     function mainVideo() {
+        if (IS_YOUTUBE) {
+            // YouTube は5分より短い動画もふつうにある。長さでは選ばず、プレイヤーの中の <video> を使う
+            const v = document.querySelector('#movie_player video, .html5-video-player video');
+            return v && Number.isFinite(v.duration) && v.duration > 0 ? v : null;
+        }
         const vids = Array.from(document.querySelectorAll('video'))
             .filter(v => Number.isFinite(v.duration) && v.duration >= 300);
         return vids.length ? vids.reduce((a, b) => (b.duration > a.duration ? b : a)) : null;
     }
 
-    return { readRoom, start };
+    return { readRoom, start, guardKeys };
 })();
 
 
@@ -2705,7 +2822,9 @@ const WP_PRUNE = (() => {
      * 広告が消えない回があった（再生タブがつながって3秒後には、動画にもう75秒の広告が入っていた）。
      * Brave も拡張機能も読み込みの最初から割り込んでいる。Netflix は別の仕組みなので Prime のときだけ。
      */
-    if (location.hostname !== 'www.netflix.com') WP_PRUNE.install();
+    if (location.hostname === 'www.amazon.co.jp' || location.hostname === 'www.primevideo.com') WP_PRUNE.install();
+    // YouTube: チャット欄で打ったキーが、YouTube のキー操作（k＝停止・f＝全画面など）に取られないようにする
+    WP_SHIM.guardKeys();
 
     // ここから下（画面・チャット・同期）は、今までどおり読み込みの後に動かす
     const __wpStartRest = () => {
@@ -4061,6 +4180,270 @@ const WP_PRUNE = (() => {
     }
 
     globalThis.WPAdapters.list.push(NetflixAdapter);
+})();
+
+    // ---- extension/adapters/youtube.js ----
+/**
+ * YouTube アダプタ。
+ *
+ * youtube.com のページには `#movie_player` があり、そこに操作用の関数が生えている
+ * （MAIN world で動いているので触れる）:
+ *
+ *   getCurrentTime() / getDuration()   … 秒
+ *   seekTo(sec, allowSeekAhead)
+ *   playVideo() / pauseVideo()
+ *   getPlayerState()                   … 1=再生中 2=停止 3=読み込み 0=終了
+ *   getAdState() / getVideoData()
+ *
+ * Netflix と違い、**時間は最初から秒**。広告は本編とは別の動画として流れるため、
+ * Prime / Netflix のような「本編の時間への換算」は要らない（下の「広告」を参照）。
+ *
+ * YouTube は SPA で、動画を切り替えても `#movie_player` は作り直されない。
+ * そのため掴み直しではなく、URL の v= が変わったかで作品の切り替えを見る。
+ */
+(() => {
+    const Base = globalThis.WPAdapters.Base;
+
+    // watch?v=ID、youtu.be/ID、/shorts/ID、/embed/ID。ID は11文字
+    const YT_ID = /(?:[?&]v=|youtu\.be\/|\/shorts\/|\/embed\/)([A-Za-z0-9_-]{11})(?=[/?&#]|$)/;
+
+    const RESCAN_MS = 1000;
+
+    /*
+     * シークの検出。
+     * YouTube のプレイヤーでも、人がシークバーを動かしたときに <video> の seeked が
+     * 出ないことがある。時計の進みと再生位置の進みを比べ、食い違ったらシークとみなす。
+     * （Netflix アダプタと同じ考え方）
+     */
+    const WATCH_MS = 250;
+    const JUMP_SEC = 2.0;
+    const SEEK_DEDUPE_MS = 1000;
+
+    // 再生状態（getPlayerState の戻り値）
+    const ST_ENDED = 0, ST_PLAYING = 1, ST_PAUSED = 2, ST_BUFFERING = 3;
+
+    /*
+     * 広告。
+     * YouTube の広告は**本編とは別の動画**として流れ、その間 getCurrentTime() は
+     * 広告自身の時間（0秒から）を返す（本編の位置は進まない）。Prime / Netflix のように
+     * 「広告の分を差し引いて本編の時間を出す」必要は無い。
+     *
+     * 広告中は本編の位置が分からないので、最後に読めた本編の位置を外に見せる。
+     *
+     * **広告かどうかは、時間を読むたびにその場で確かめる**（見回りの結果を使わない）。
+     * 見回りを待つと、広告に入った直後の隙間で「1200秒→0秒に飛んだ＝シーク」と誤検出し、
+     * 全員を 0 秒へ飛ばしてしまう（テストで実際に起きた）。
+     */
+    const AD_WATCH_MS = 250;
+
+    class YouTubeAdapter extends Base {
+        static get service() { return 'youtube'; }
+
+        static match(url) {
+            return /^https:\/\/(www|m|music)\.youtube\.com\//.test(url);
+        }
+
+        constructor() {
+            super();
+            this._player = null;
+            this._video = null;
+            this._detach = null;
+            this._rescanTimer = null;
+            this._watchTimer = null;
+            this._adTimer = null;
+            this._inAd = false;          // 記録（ad-start / ad-end）を出すための、前回の状態
+            this._lastContentTime = 0;   // 広告でないときに最後に読めた本編の位置
+            this._lastSeekAt = 0;
+            this._lastWatch = null;
+        }
+
+        /** `#movie_player` に必要な関数が生えているか */
+        static _usable(el) {
+            return Boolean(el &&
+                typeof el.getCurrentTime === 'function' &&
+                typeof el.seekTo === 'function' &&
+                typeof el.getPlayerState === 'function');
+        }
+
+        _find() {
+            const el = document.getElementById('movie_player') ||
+                document.querySelector('.html5-video-player');
+            return YouTubeAdapter._usable(el) ? el : null;
+        }
+
+        async ready() {
+            // 再生ボタンを押すまでプレイヤーが現れないことがあるので、期限なしで待つ
+            this._player = await Base.waitFor(() => this._find(), { timeoutMs: Infinity });
+            this._video = document.querySelector('#movie_player video, .html5-video-player video');
+            this._bind();
+            this._rescanTimer = setInterval(() => this._rescan(), RESCAN_MS);
+            this._watchTimer = setInterval(() => this._watch(), WATCH_MS);
+            this._adTimer = setInterval(() => this._watchAds(), AD_WATCH_MS);
+        }
+
+        /** SPA でプレイヤーが作り直されたら掴み直す */
+        _rescan() {
+            const found = this._find();
+            if (found && found !== this._player) {
+                this._player = found;
+                this._video = document.querySelector('#movie_player video, .html5-video-player video');
+                this._bind();
+            }
+        }
+
+        _bind() {
+            if (this._detach) this._detach();
+            const v = this._video;
+            if (!v) { this._detach = null; return; }
+            // 広告の再生/停止は本編の操作ではないので送らない（その場で確かめる）
+            const onPlay = () => { if (!this._detectAd()) this._emit('play'); };
+            const onPause = () => { if (!this._detectAd()) this._emit('pause'); };
+            const onSeeked = () => this._seekDetected();
+            v.addEventListener('play', onPlay);
+            v.addEventListener('pause', onPause);
+            v.addEventListener('seeked', onSeeked);
+            this._detach = () => {
+                v.removeEventListener('play', onPlay);
+                v.removeEventListener('pause', onPause);
+                v.removeEventListener('seeked', onSeeked);
+            };
+        }
+
+        /** seeked と「時間の飛び」の両方で気づくことがあるので、近い時刻のものは1回にまとめる */
+        _seekDetected() {
+            // 広告の出入りでも時間は飛ぶ。シークと取り違えないよう、その場で確かめる
+            if (this._detectAd()) return;
+            const now = Date.now();
+            if (now - this._lastSeekAt < SEEK_DEDUPE_MS) return;
+            this._lastSeekAt = now;
+            this._emit('seek');
+        }
+
+        /** 時計の進みと再生位置の進みを比べ、食い違ったらシークとみなす */
+        _watch() {
+            // 広告中の時間は広告自身のもの。比べると必ず「飛んだ」ことになるので比べない
+            if (!this._player || this._detectAd()) { this._lastWatch = null; return; }
+            let t;
+            try { t = this._player.getCurrentTime(); } catch { return; }
+            this._lastContentTime = t;
+            const now = Date.now();
+            const prev = this._lastWatch;
+            this._lastWatch = { t, at: now };
+            if (!prev || this.isPaused()) return;
+            const elapsed = (now - prev.at) / 1000;
+            if (Math.abs((t - prev.t) - elapsed) > JUMP_SEC) this._seekDetected();
+        }
+
+        /**
+         * 広告の出入りを記録する（ad-start / ad-end）。
+         * 時間の扱いには使わない（そちらは読むたびに _detectAd() で確かめる）。
+         */
+        _watchAds() {
+            const now = this._detectAd();
+            if (now === this._inAd) return;
+            this._inAd = now;
+            if (!now) this._lastWatch = null;   // 広告明けの時間の飛びをシークと取り違えない
+            this._reportDiag(now ? 'ad-start' : 'ad-end');
+        }
+
+        _detectAd() {
+            const p = this._player;
+            if (!p) return false;
+            // プレイヤー自身が名乗る（ad-showing はクラス名として長く使われている）
+            try {
+                if (typeof p.getAdState === 'function' && p.getAdState() > 0) return true;
+            } catch { /* 版によっては無い */ }
+            return p.classList?.contains('ad-showing') ||
+                p.classList?.contains('ad-interrupting') || false;
+        }
+
+        _raw() {
+            try { return this._player ? this._player.getCurrentTime() : 0; } catch { return 0; }
+        }
+
+        // --- Base のインターフェース ------------------------------------------
+
+        getCurrentTime() {
+            // 広告中は本編が進まないので、最後に読めた本編の位置を見せ続ける。
+            // 広告かどうかはその場で確かめる（見回りの結果を待つと隙間で 0 秒が漏れる）
+            if (this._detectAd()) return this._lastContentTime;
+            const t = this._raw();
+            this._lastContentTime = t;
+            return t;
+        }
+
+        getDuration() {
+            try { return this._player ? this._player.getDuration() : NaN; } catch { return NaN; }
+        }
+
+        isPaused() {
+            try {
+                const s = this._player.getPlayerState();
+                return s === ST_PAUSED || s === ST_ENDED;
+            } catch {
+                return this._video ? this._video.paused : true;
+            }
+        }
+
+        // その場で確かめる。bridge.js はこれを見て「広告中は送らない／合わせない」を決めるので、遅れると漏れる
+        isInAd() { return this._detectAd(); }
+
+        isPlayerOpen() {
+            return Boolean(this._player) && Number.isFinite(this.getDuration()) && this.getDuration() > 0;
+        }
+
+        /**
+         * YouTube は URL の v= がそのまま別の動画を意味する（Netflix と同じ）。
+         * Prime のような「同じ作品なのに URL が書き換わる」現象は無い。
+         */
+        ignoreUrlChange() { return false; }
+
+        play() {
+            if (this._detectAd()) return;   // 広告に手を出すと本編の再生が乱れる
+            try { this._player.playVideo(); } catch { this._video?.play?.(); }
+        }
+
+        pause() {
+            if (this._detectAd()) return;
+            try { this._player.pauseVideo(); } catch { this._video?.pause?.(); }
+        }
+
+        seek(seconds) {
+            if (this._detectAd()) return;
+            // 第2引数 true で、指定位置まで実際に読み込みに行く（false だと近くで止まる）
+            try { this._player.seekTo(seconds, true); } catch {
+                if (this._video) this._video.currentTime = seconds;
+            }
+            this._lastWatch = null;   // 次の _watch でシークと誤検出しないように
+        }
+
+        getContentId(url) {
+            const m = YT_ID.exec(url || '');
+            return m ? m[1] : null;
+        }
+
+        buildUrl(contentId) {
+            return `https://www.youtube.com/watch?v=${contentId}`;
+        }
+
+        describeForDiag() {
+            let state = null;
+            try { state = this._player?.getPlayerState?.(); } catch { /* 無い版もある */ }
+            return {
+                url: location.href,
+                raw: this._raw(),
+                shown: this.getCurrentTime(),
+                inAd: this._detectAd(),
+                lastContentTime: this._lastContentTime,
+                state,
+                duration: this.getDuration(),
+                paused: this.isPaused()
+            };
+        }
+    }
+
+    globalThis.WPAdapters.list.push(YouTubeAdapter);
+    globalThis.WPAdapters.YouTube = YouTubeAdapter;
 })();
 
     // ---- extension/adapters/registry.js ----
