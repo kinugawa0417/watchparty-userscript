@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.27
+// @version      1.0.28
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.27";
+    const __WP_VERSION__ = "1.0.28";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1124,6 +1124,17 @@ const WP_SHIM = (() => {
                  *   ・**「▶ 再生をはじめる」を押してもらうのが本命**。ブラウザは「人が触るまで音の出る再生を許さない」ので、
                  *     この1回のタップで「再生が始まらない」と「音が消えている」の両方が直る
                  */
+                /*
+                 * 再生が始まるまで、作品ページを全部おおう（2026-10-14 ユーザー要望）。
+                 * 「何もせずにお待ちください」と出していても、うしろの作品ページ（続きを観る・予告編を観る など）が見えて触れるので、
+                 * 押してしまっていた。**見せない・触らせない**。チャット欄と 💬 はこの上に出る（z-index と並び順）。
+                 * ログインやプロフィール選びが出ているときのために、しばらく待つと「〇〇 の画面を見る」を出す。
+                 */
+                .cover { position: fixed; inset: 0; z-index: 2; pointer-events: auto; background: #0d0d12; }
+                .clock[data-kind="wait"] { width: min(86vw, 420px); box-sizing: border-box; }
+                .cover .cescape { position: absolute; left: 50%; top: calc(10px + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
+                    border: 0; background: transparent; color: #7aa2ff; font: 600 13px/1.5 -apple-system, system-ui, sans-serif;
+                    text-decoration: underline; padding: 10px 12px; cursor: pointer; white-space: nowrap; }
                 .gate { position: fixed; inset: 0; z-index: 8; pointer-events: auto; background: #0d0d12;
                         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
                         padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px)); text-align: center; color: #f2f2f4; }
@@ -1162,6 +1173,7 @@ const WP_SHIM = (() => {
                 <div class="update oldscript" hidden>⚠ 古い「Watch Party」が残っています。Userscripts アプリで「Watch Party」を削除してください（見られない・チャットが届かない原因になります）</div>
             </div>
             <a class="other" hidden></a>
+            <div class="cover" hidden><button class="cescape" type="button" hidden></button></div>
             <button class="fab">💬<span class="badge" hidden></span></button>
             <div class="panel" hidden>
                 <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="refix" title="再生がおかしいときに立て直す" aria-label="再生を立て直す">🔄</button><button class="pop" title="チャットを別の窓で開く" aria-label="チャットを別の窓で開く" hidden>⧉</button><button class="close" aria-label="閉じる">✕</button></div>
@@ -1972,6 +1984,21 @@ const WP_SHIM = (() => {
         for (const ev of ['focus', 'blur']) {
             q('form input').addEventListener(ev, () => { placePanel(true); followKeyboard(); });
         }
+        /*
+         * **送信してもキーボードを閉じない**（2026-10-14 ユーザー報告: 送るたびに閉じてうざい）。
+         * 送信ボタンを指で押すと、入力欄からフォーカスが外れてキーボードが閉じていた（仕様ではなく不具合）。
+         * 指を離したとき（touchend）の既定の動きを止めると、フォーカスが動かずキーボードが残る。送信は自分で起こす。
+         * マウスは mousedown の既定の動きを止めれば、入力欄にフォーカスが残る。
+         */
+        {
+            const btn = q('form .send');
+            const form = q('form');
+            btn.addEventListener('mousedown', (e) => e.preventDefault());
+            btn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                if (form.requestSubmit) form.requestSubmit(); else form.dispatchEvent(new Event('submit', { cancelable: true }));
+            });
+        }
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
             const input = q('form input');
@@ -2125,6 +2152,7 @@ const WP_SHIM = (() => {
         // iPhone は、人が触っていないと動画を再生できないことがある。
         // ホストは再生中なのにこちらが止まったままなら、タップしてもらう
         let blockedSince = 0;
+        q('.cescape').addEventListener('click', () => { coverDismissed = true; render(); });
         q('.tap').addEventListener('click', () => {
             const v = mainVideo();
             if (IS_YOUTUBE) { applyVolume(true); try { youtubePlayer()?.playVideo(); } catch { /* 準備前 */ } }
@@ -2164,6 +2192,11 @@ const WP_SHIM = (() => {
          */
         let clockShownAt = 0;
         let clockDismissed = false;
+        // 再生が始まるまでのおおい（.cover）
+        const COVER_ESCAPE_MS = 15000;  // これだけ待っても始まらなければ、うしろの画面を見る逃げ道を出す
+        let coverSince = 0;
+        let coverDismissed = false;     // 「〇〇 の画面を見る」を押した（このページを開いている間は、もうおおわない）
+        let coverOpenedChat = false;    // おおったときにチャット欄を開いた（1回だけ。閉じた人のを開き直さない）
         for (const type of IS_DESKTOP ? ['mousemove', 'pointerdown', 'keydown'] : ['pointerdown', 'touchstart']) {
             window.addEventListener(type, () => {
                 if (!clockShownAt || clockDismissed || Date.now() - clockShownAt < 800) return;
@@ -2309,10 +2342,28 @@ const WP_SHIM = (() => {
             }
             if (!centerKind) center.dataset.kind = '';
             center.hidden = !centerKind;
+            // 再生が始まるまで、作品ページを全部おおう。チャット欄は開いておく（待っている間に話せる）
+            const cover = q('.cover');
+            const coverOn = centerKind === 'wait' && !coverDismissed;
+            if (coverOn && cover.hidden) {
+                coverSince = Date.now();
+                if (!open && !coverOpenedChat) { coverOpenedChat = true; setOpen(true); }
+            }
+            if (cover.hidden !== !coverOn) cover.hidden = !coverOn;
+            if (coverOn) {
+                const esc = q('.cescape');
+                const showEsc = Date.now() - coverSince > COVER_ESCAPE_MS;
+                if (esc.hidden !== !showEsc) esc.hidden = !showEsc;
+                if (showEsc && !esc.textContent) {
+                    esc.textContent = `始まらないとき：${({ netflix: 'Netflix', youtube: 'YouTube' }[PAGE_SERVICE] || 'Amazon')} の画面を見る`;
+                }
+            }
             if (centerKind) {
                 const cv = layoutVideo();
                 const cr = cv ? contentRect(cv) : null;
                 center.style.top = cr && cr.height > 0 ? `${Math.round(cr.top + cr.height / 2)}px` : '40%';
+                // おおっている間は、下に開いたチャット欄に重ならないよう、上寄りに置く
+                if (coverOn) center.style.top = '24%';
             }
             if (!q('.tap').hidden) {
                 // 見えている映像の真ん中へ（映像が見つからなければ画面の少し上）
