@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.29
+// @version      1.0.30
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.29";
+    const __WP_VERSION__ = "1.0.30";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -643,6 +643,8 @@ const WP_SHIM = (() => {
     const KEY = 'wp:userscript' + (WP_US.ENV_TAG ? ':' + WP_US.ENV_TAG : '');
     const PLAY_BLOCKED_MS = 3000;
     const IS_ANDROID = /Android/i.test(navigator.userAgent);
+    // iPad は「Mac の Safari」を名乗るので、指で触れる画面かで見分ける
+    const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
     // PC（Windows / Mac）。iPad は Mac を名乗るので、指で触れる画面かで除く（2026-09-14 PC のゲスト用）
     const IS_DESKTOP = !IS_ANDROID && !/iPhone|iPad|iPod/i.test(navigator.userAgent) &&
         !(/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
@@ -790,7 +792,15 @@ const WP_SHIM = (() => {
          */
         const FIX_KEY = 'wp:lastFix';
         const recentFix = (() => { try { return Date.now() - Number(sessionStorage.getItem(FIX_KEY) || 0) < 120000; } catch { return false; } })();
-        const TROUBLE_SHOW_MS = recentFix ? 10000 : 20000;
+        /*
+         * 以前は、🔄 を押してから2分以内は 10 秒で「再生を立て直す」を出していた。
+         * ところが実機の記録（2026-10-14）では、iPhone は飛んだ先を読み込んで再生が動き出すまで 10〜15 秒かかる。
+         * 読み込みの途中で「再生が止まっています」と出る → 押す → 最初から読み込み直し → また 10 秒で出る、の繰り返しになっていた。
+         * いつも 20 秒待ち、さらに**開いてから（プレイヤーが出てから）35 秒は出さない**（その間は「読み込み中」と出す）。
+         */
+        const TROUBLE_SHOW_MS = 20000;
+        const STARTUP_GRACE_MS = 35000;
+        let readyAt = 0;            // プレイヤーを掴めた時刻
         const DRIFT_SHOW_SEC = 8;
         let contentT = null;
         let contentTAt = 0;
@@ -974,6 +984,7 @@ const WP_SHIM = (() => {
             if (!d || d.source !== SRC_BRIDGE) return;
             if (d.type === 'READY') {
                 playerReady = true;
+                if (!readyAt) readyAt = Date.now();
                 if (connected) socket.emit('request-sync');
                 render();
             } else if (d.type === 'STATUS') {
@@ -1844,6 +1855,13 @@ const WP_SHIM = (() => {
         let adReloadDone = false;
         function reloadIfAdsLeft() {
             if (adReloadDone || PAGE_SERVICE !== 'prime') return;
+            /*
+             * **iPhone ではやらない**（2026-10-14 実機の記録）。iPhone は配信リストの形が違い、広告の区間を削れていない
+             * （記録の mpd が毎回 0）。開き直しても動画の長さは変わらず（5回中5回）、**開き直しが1回増えるだけ**だった。
+             * しかも開き直すと待機画面の「▶ 再生をはじめる」をもう一度押すことになり、「何度もやってやっと始まる」の原因になっていた。
+             * 広告の区間が残っていても、広告の位置の換算でホストには合う（記録で 1 秒以内）。
+             */
+            if (IS_IOS) return;
             if (gatePassed && Date.now() - openedAt > AD_RELOAD_WINDOW_MS) return;
             if (typeof globalThis.__wpPruneStats !== 'function') return;   // 広告消しが入っていない
             const v = mainVideo();
@@ -2324,8 +2342,18 @@ const WP_SHIM = (() => {
             const waitingPlayer = connected && hasHost && !otherVideo && !hostHold && !ended && !playerReady && q('.tap').hidden;
             const clock = connected && hasHost && !otherVideo && !hostHold && !ended && playerReady && needsClock() && !clockDismissed && q('.tap').hidden;
             const center = q('.clock:not(.adwait)');
+            /*
+             * **読み込み中**（2026-10-14 実機）。プレイヤーは出たが、ホストの場面まで飛んで読み込んでいて、まだ動き出していない。
+             * 何も出していなかったので、止まって見えて 🔄 を押され、読み込みが最初からになっていた。真ん中に「そのまま待って」と出す。
+             * 出すのは開いてから STARTUP_GRACE_MS の間と、止まっている扱いになる前まで（そのあとは「再生を立て直す」に任せる）
+             */
+            const lv = mainVideo();
+            const moving = Boolean(lv) && !lv.paused && !lv.seeking && lv.readyState >= 3;
+            const loading = connected && hasHost && hostPlaying && !hostAd && !selfAd && !otherVideo && !hostHold && !ended &&
+                playerReady && gatePassed && !waitingGesture() && !moving && q('.tap').hidden &&
+                Date.now() - (readyAt || openedAt) < STARTUP_GRACE_MS + TROUBLE_SHOW_MS;
             // 出す中身が切り替わったときだけ書き換える（毎秒書き換えると、字が一瞬消えてちらつく）
-            const centerKind = waitingPlayer ? 'wait' : clock ? 'gesture' : '';
+            const centerKind = waitingPlayer ? 'wait' : loading ? 'load' : clock ? 'gesture' : '';
             if (centerKind && center.dataset.kind !== centerKind) {
                 center.dataset.kind = centerKind;
                 const note = document.createElement('small');
@@ -2333,6 +2361,9 @@ const WP_SHIM = (() => {
                     center.textContent = '▶ 再生が始まるまで、何もせずにお待ちください';
                     note.textContent = '自動でプレイヤーが起動します。ボタンは押さなくて大丈夫です。'
                         + '開かない場合は、招待ページから開きなおしてください';
+                } else if (centerKind === 'load') {
+                    center.textContent = '⏳ 読み込み中です。そのままお待ちください';
+                    note.textContent = 'ホストの場面まで進めています。10〜20秒かかることがあります（🔄 は押さなくて大丈夫です）';
                 } else {
                     center.textContent = IS_DESKTOP ? '🖱 マウスを画面の上で動かしてください' : '👆 画面を1回タップしてください';
                     note.textContent = IS_DESKTOP
@@ -2411,6 +2442,7 @@ const WP_SHIM = (() => {
             // 止まったまま・大きくずれたままが続いたら、立て直しを真ん中に（「このまま見る」を押したら2分は出さない）
             // 「▶ タップして再生」が出ていても20秒直らなければ、こちらに替える（タップでは直らない止まり方）
             const fixShown = Boolean(trouble) && troubleSince && Date.now() - troubleSince > TROUBLE_SHOW_MS &&
+                Date.now() - (readyAt || openedAt) > STARTUP_GRACE_MS &&
                 Date.now() - fixDismissedAt > 120000 && other.hidden;
             if (fixShown) q('.tap').hidden = true;
             if (fixShown) {
