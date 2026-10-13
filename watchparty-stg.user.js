@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.28
+// @version      1.0.29
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.28";
+    const __WP_VERSION__ = "1.0.29";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -2014,6 +2014,8 @@ const WP_SHIM = (() => {
              * 高さを測れない。実機の写真で測るとキーボードは画面の3割半ほどだったので、4割の位置に置いて余裕を見る。
              */
             const form = q('form');
+            // 以前はここで決めていない composing を見ていて、Android で送るたびに例外が出ていた（2026-10-14 実機の記録で判明）
+            const composing = !IS_DESKTOP && root.activeElement === input;
             if (form) {
                 if (IS_ANDROID && composing) {
                     form.style.position = 'fixed';
