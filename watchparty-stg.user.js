@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.26
+// @version      1.0.27
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.26";
+    const __WP_VERSION__ = "1.0.27";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -752,6 +752,9 @@ const WP_SHIM = (() => {
         let otherVideo = null;
         /** ホストの作品が変わって、まだ送られていない（2026-09-14）。送られるまで合わせない */
         let hostHold = false;
+        // ホストが上映を終了した（2026-10-14）。合わせるのをやめ、真ん中に「上映は終わりました」を出す
+        let ended = false;
+        const endShow = () => { if (!ended) { ended = true; toBridge('STOP'); } render(); };
         /** 動画（プレイヤー）を掴めたか。掴めるまでは「自動で合わせています」と出さない（Netflix のエラー画面でも出ていた） */
         let playerReady = false;
         const openedAt = Date.now();
@@ -901,7 +904,7 @@ const WP_SHIM = (() => {
             if (hostRef && wasPlaying && !hostPlaying && !hostAd && p.type !== 'seek') noteHostEvent('⏸ ホストが一時停止しました');
             else if (hostRef && !wasPlaying && hostPlaying && p.type === 'play') noteHostEvent('▶ ホストが再生しました');
             hostRef = { t: sec, at: Number.isFinite(p.timestamp) && Math.abs(p.timestamp - Date.now()) < 60000 ? p.timestamp : Date.now() };
-            if (!otherVideo && !hostHold && !waitingGesture()) {
+            if (!otherVideo && !hostHold && !ended && !waitingGesture()) {
                 toBridge('APPLY', {
                     type: p.type,
                     currentTime: sec,
@@ -919,6 +922,8 @@ const WP_SHIM = (() => {
             const sec = U.cleanSec(s.currentTime);
             if (sec === null) return;
             hostHold = s.hold === true;
+            if (s.stopped === true) return endShow();
+            if (s.contentId) ended = false;
             checkTitle(s);
             sendPlan(s);
             hostPlaying = Boolean(s.isPlaying);
@@ -934,8 +939,10 @@ const WP_SHIM = (() => {
             render();
         });
 
+        socket.on('video-stopped', () => endShow());
         socket.on('change-video', (v) => {
             hostHold = false;
+            ended = false;
             if (v && typeof v === 'object') hostVideo = U.cleanVideo(v) || hostVideo;
             checkTitle(v);
             // 同じ作品が送り直された（Prime の次の話で、アドレスが変わらないとき）→ ホストの今の位置を取り直す
@@ -2248,6 +2255,7 @@ const WP_SHIM = (() => {
                 tooOld ? 'スクリプトが古いので見られません。招待ページに戻って入れ直してください'
                 : !connected ? 'KINUGAWA Party Theater つないでいます…'
                 : !hasHost ? 'ホストの接続が切れました（戻るまで、このまま再生します）'
+                : ended ? 'ホストが上映を終了しました'
                 : hostHold ? 'ホストが次の作品を選んでいます'
                 : otherVideo ? 'ホストが別の作品に変えました'
                 : selfAd ? '広告のあと、ホストに合わせます'
@@ -2270,15 +2278,16 @@ const WP_SHIM = (() => {
             renderVoice();
             // チャット欄を開いている間は、左下の表示が後ろに隠れるので見出しにも出す
             q('.hstate').textContent = q('.text').textContent;
-            q('.hstate').style.color = connected && hasHost && !otherVideo && !hostHold ? '#3ddc84' : '#ffb340';
+            q('.hstate').style.color = connected && hasHost && !otherVideo && !hostHold && !ended ? '#3ddc84' : '#ffb340';
             q('.tap').hidden = !(blockedSince && Date.now() - blockedSince > PLAY_BLOCKED_MS);
             /*
              * **動画をまだ掴めていない間は、真ん中に「そのまま待って」と出す**（2026-09-21 ユーザー要望）。
              * 左下に小さく「動画が始まるのを待っています」と出していたが、作品ページでは気づかず、
              * 「続きを観る」などのボタンを押してしまっていた。
              */
-            const waitingPlayer = connected && hasHost && !otherVideo && !hostHold && !playerReady && q('.tap').hidden;
-            const clock = connected && hasHost && !otherVideo && !hostHold && playerReady && needsClock() && !clockDismissed && q('.tap').hidden;
+            if (ended) q('.tap').hidden = true;
+            const waitingPlayer = connected && hasHost && !otherVideo && !hostHold && !ended && !playerReady && q('.tap').hidden;
+            const clock = connected && hasHost && !otherVideo && !hostHold && !ended && playerReady && needsClock() && !clockDismissed && q('.tap').hidden;
             const center = q('.clock:not(.adwait)');
             // 出す中身が切り替わったときだけ書き換える（毎秒書き換えると、字が一瞬消えてちらつく）
             const centerKind = waitingPlayer ? 'wait' : clock ? 'gesture' : '';
@@ -2313,8 +2322,30 @@ const WP_SHIM = (() => {
             }
             const other = q('.other');
             // 今と同じサイト（amazon.co.jp / primevideo.com）で開く
-            const url = otherVideo ? reopenUrl(otherVideo) : null;
-            if (url) {
+            const url = otherVideo && !ended ? reopenUrl(otherVideo) : null;
+            if (ended) {
+                /*
+                 * 上映が終わった（2026-10-14 ユーザー要望: ホストが終了を押すと、待機用の画面に戻る）。
+                 * 待つ場所はチャットの部屋（招待ページ）なので、このタブを閉じて戻ってもらう。
+                 * ページから開いたタブは window.close() で閉じられることが多いが、閉じられないブラウザもあるので、
+                 * そのときは自分で閉じてもらうひと言に変える。
+                 */
+                if (other.dataset.kind !== 'ended') {
+                    other.dataset.kind = 'ended';
+                    other.removeAttribute('href');
+                    other.textContent = '🎬 上映は終わりました';
+                    const sub = document.createElement('small');
+                    sub.textContent = '押すとこのタブを閉じて、チャットの部屋に戻ります';
+                    other.appendChild(sub);
+                    other.onclick = (e) => {
+                        e.preventDefault();
+                        try { window.close(); } catch { /* 閉じられないブラウザ */ }
+                        setTimeout(() => { sub.textContent = 'このタブを閉じて、チャットの部屋に戻ってください'; }, 400);
+                    };
+                }
+                other.hidden = false;
+            } else if (url) {
+                if (other.dataset.kind) { other.dataset.kind = ''; other.onclick = null; }
                 other.href = url;
                 other.textContent = '▶ ホストの作品を開く';
                 const sub = document.createElement('small');
@@ -2335,7 +2366,7 @@ const WP_SHIM = (() => {
             }
             q('.fix').hidden = !fixShown;
             // ホストの広告の間はこちらを止めて待つ。止まった理由を真ん中に出す（2026-09-14 ユーザー報告: 再生されたと思ったらすぐ止まる）
-            q('.adwait').hidden = !(connected && hasHost && hostAd && !selfAd && !otherVideo && !hostHold && playerReady && !fixShown && q('.clock:not(.adwait)').hidden);
+            q('.adwait').hidden = !(connected && hasHost && hostAd && !selfAd && !otherVideo && !hostHold && !ended && playerReady && !fixShown && q('.clock:not(.adwait)').hidden);
 
             // --- 待機画面と音量（2026-09-23）------------------------------------
             renderGate();
@@ -4887,6 +4918,14 @@ const WP_PRUNE = (() => {
                 startup = false;
                 deferredStop = false;
             }
+        } else if (data.type === 'STOP') {
+            // ホストが上映を終了した。合わせるのをやめて、その場で止める（次に作品が送られるまで動かさない）
+            if (bound && !isHost) {
+                stopFollowing();
+                lastApplyAt = 0;
+                withEchoGuard(() => adapter.pause());
+                postStatus();
+            }
         } else if (data.type === 'REQUEST_INFO') {
             sendInfo();
         } else if (data.type === 'PLAN') {
@@ -4987,11 +5026,25 @@ const WP_PRUNE = (() => {
         return null;
     }
 
+    /**
+     * 作品の名前（ホストのパネルに「いま送っている作品」として出すだけ。**サーバーへは送らない**）。
+     * ページの題から、サイトの名前などの決まり文句を落とす。取れなければ空
+     */
+    function pageTitle() {
+        let t = String(document.title || '');
+        t = t.replace(/^Amazon\.co\.jp[:：]\s*/, '').replace(/\s*を観る\s*[|｜]\s*Prime Video\s*$/, '')
+            .replace(/\s*[|｜]\s*Prime Video\s*$/, '').replace(/^Prime Video[:：]\s*/, '')
+            .replace(/\s*-\s*YouTube\s*$/, '').replace(/^\(\d+\)\s*/, '')
+            .replace(/\s*[|｜]\s*Netflix.*$/, '').replace(/^Netflix$/, '').trim();
+        return t.slice(0, 60);
+    }
+
     function pageInfo() {
         const ep = currentEpisode();
         if (ep) {
             return {
                 service: adapter.constructor.service,
+                title: pageTitle(),
                 contentId: ep.gti,
                 url: adapter.buildUrl(ep.gti),
                 // その話が入っているページ（シーズン）。そのページを送ってあれば、最初の話は確かめずに送る（background）
@@ -5001,6 +5054,7 @@ const WP_PRUNE = (() => {
         const contentId = adapter.getContentId(location.href);
         return {
             service: adapter.constructor.service,
+            title: pageTitle(),
             contentId,
             // 参加者を飛ばす先。サービス側の余計なパラメータを除いた形にする
             url: (contentId && adapter.buildUrl(contentId)) || location.href
