@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.25
+// @version      1.0.26
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.25";
+    const __WP_VERSION__ = "1.0.26";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -2887,6 +2887,11 @@ const WP_PRUNE = (() => {
          * ホストのときだけ呼ばれる。押したら true。
          */
         dismissInterruption() { return false; }
+        /**
+         * 作品の終わりに出る「次の作品／次のエピソードを自動で再生」を止める。
+         * **ゲストのときだけ**呼ばれる（ホストは自分で選ぶ）。止めたら true。
+         */
+        blockAutoNext() { return false; }
         play() { throw new Error('not implemented'); }
         pause() { throw new Error('not implemented'); }
         seek(_seconds) { throw new Error('not implemented'); }
@@ -3024,6 +3029,22 @@ const WP_PRUNE = (() => {
     const AD_JUMP_SEC = 1.5;
     // これより短い「広告」は誤検知として捨てる（秒）
     const AD_MIN_SEC = 1.0;
+
+    /*
+     * 作品の終わりの「次の作品」（2026-10-13 ユーザー要望：終わったあと、視聴者が次の映画へ飛ばされるのを防ぐ）。
+     * Prime はエンドロールで「次の作品／次のエピソード」のカードを出し、数秒後に自動で再生を始める。
+     * プレイヤーは開いたままなので、こちらは同じ作品のつもりでホストの位置へ合わせ続けてしまう。
+     * カードには「非表示」のボタンがあり、押すと自動再生が取り消されてエンドロールが最後まで流れる。**これを自動で押す**。
+     *
+     * 部品の名前は Prime の Web プレイヤー（atvwebplayersdk-nextupcard-…）のもの。
+     * **本物の終わりの画面では、まだ確かめられていない**（自動操作だと終盤へ飛んだところで読み込みが止まる）。
+     * 名前が変わっていても拾えるよう、文字（非表示／Hide）でも探し、見つけたカードの様子を記録に残す（nextup-seen）。
+     */
+    const NEXTUP_HIDE = '[class*="nextupcardhide" i], [class*="nextuphide" i], [class*="nextup-hide" i]';
+    const NEXTUP_CARD = '[class*="nextupcard" i], [class*="nextup-card" i], [class*="next-up" i], [class*="upnext" i]';
+    const NEXTUP_HIDE_TEXT = /^(非表示|非表示にする|Hide|クレジットを見る|Watch credits)$/i;
+    const NEXTUP_COOLDOWN_MS = 1500;
+    const NEXTUP_DIAG_GAP_MS = 20000;
 
     class PrimeAdapter extends Base {
         static get service() { return 'prime'; }
@@ -3446,6 +3467,72 @@ const WP_PRUNE = (() => {
         releaseControl() {
             this._want = null;
             clearInterval(this._enforceTimer);
+        }
+
+        // --- 次の作品への自動再生 -----------------------------------------------
+
+        /**
+         * 「次の作品／次のエピソード」のカードの「非表示」を押して、自動再生を止める（ゲストのときだけ呼ばれる）。
+         * 押したら true。カードが出ていなければ何もしない
+         */
+        blockAutoNext() {
+            if (!this.isPlayerOpen()) return false;
+            const now = Date.now();
+            if (now - (this._nextUpAt || 0) < NEXTUP_COOLDOWN_MS) return false;
+            const vis = (el) => { const r = el.getBoundingClientRect(); return r.width >= 10 && r.height >= 10; };
+            const label = (el) => `${el.textContent || ''}`.trim();
+            const isHide = (el) => NEXTUP_HIDE_TEXT.test(label(el)) || NEXTUP_HIDE_TEXT.test((el.getAttribute('aria-label') || '').trim());
+
+            // 1) 名前で探す
+            let btn = Array.from(document.querySelectorAll(NEXTUP_HIDE)).find(vis);
+            let how = 'class';
+            const cards = Array.from(document.querySelectorAll(NEXTUP_CARD)).filter(vis);
+            // 2) カードの中の「非表示」
+            if (!btn) {
+                for (const card of cards) {
+                    btn = Array.from(card.querySelectorAll('button, [role="button"]')).find(el => vis(el) && isHide(el));
+                    if (btn) { how = 'card-text'; break; }
+                }
+            }
+            // 3) 名前が変わっていたとき：映像に重なっている「非表示」という名前のボタン
+            if (!btn) {
+                const box = this._video.getBoundingClientRect();
+                btn = Array.from(document.querySelectorAll('button, [role="button"]')).find(el => {
+                    if (!isHide(el) || !vis(el)) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom;
+                });
+                if (btn) how = 'text';
+            }
+            if (!btn) {
+                // カードらしいものは出ているのに押す所が見つからない。次に直せるよう、様子を記録に残す
+                if (cards.length && now - (this._nextUpDiagAt || 0) > NEXTUP_DIAG_GAP_MS) {
+                    this._nextUpDiagAt = now;
+                    this._reportDiag('nextup-seen', this._describeNextUp(cards));
+                }
+                return false;
+            }
+            this._nextUpAt = now;
+            btn.click();
+            this._reportDiag('nextup-hidden', { how, ...this._describeNextUp(cards.length ? cards : [btn]) });
+            console.log('[wp] prime: next-up card hidden', how);
+            return true;
+        }
+
+        /** 記録用。サーバーの記録は英数字しか残さないので、部品の名前と、ボタンの文字（文字コードの並び）を送る */
+        _describeNextUp(els) {
+            const code = (s) => Array.from(String(s).trim().slice(0, 6)).map(c => c.codePointAt(0).toString(16)).join('.');
+            const names = (el) => (typeof el.className === 'string' ? el.className : '').split(/\s+/)
+                .filter(c => /next|hide|card|credit/i.test(c)).slice(0, 4).map(c => c.slice(0, 40));
+            const first = els[0];
+            const buttons = Array.from(first.querySelectorAll ? first.querySelectorAll('button, [role="button"]') : []).slice(0, 5);
+            return {
+                cards: els.length,
+                cls: names(first),
+                btnCls: buttons.map(b => names(b)[0] || '').slice(0, 5),
+                btnText: buttons.map(b => code(b.textContent || b.getAttribute('aria-label') || '')).slice(0, 5),
+                left: Math.round((this._video.duration || 0) - (this._video.currentTime || 0))
+            };
         }
 
         _activeWant() {
@@ -5229,6 +5316,19 @@ const WP_PRUNE = (() => {
         }, WP.INTERRUPT_CHECK_MS);
     }
 
+    /*
+     * 作品の終わりの「次の作品を自動で再生」を止める（2026-10-13 ユーザー要望）。
+     * **ゲストとして合わせているときだけ**（ホストからの合わせ込みを一度でも受けた再生タブ）。
+     * ホストや、ルームに入っていない普段の視聴では触らない。
+     */
+    const AUTO_NEXT_CHECK_MS = 1000;
+    function watchAutoNext() {
+        setInterval(() => {
+            if (!bound || isHost || !lastApplyAt) return;
+            try { adapter.blockAutoNext(); } catch (e) { console.warn('[wp] block auto-next failed', e); }
+        }, AUTO_NEXT_CHECK_MS);
+    }
+
     async function start() {
         adapter = globalThis.WPAdapters.resolve(location.href);
         if (!adapter) return;
@@ -5260,6 +5360,7 @@ const WP_PRUNE = (() => {
         watchStuck();
         watchTitle();
         watchInterruptions();
+        watchAutoNext();
 
         post('READY', pageInfo());
         console.log('[wp] bridge ready:', adapter.constructor.service);
