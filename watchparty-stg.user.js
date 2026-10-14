@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.30
+// @version      1.0.31
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.30";
+    const __WP_VERSION__ = "1.0.31";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1143,9 +1143,11 @@ const WP_SHIM = (() => {
                  */
                 .cover { position: fixed; inset: 0; z-index: 2; pointer-events: auto; background: #0d0d12; }
                 .clock[data-kind="wait"] { width: min(86vw, 420px); box-sizing: border-box; }
-                .cover .cescape { position: absolute; left: 50%; top: calc(10px + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
+                .cover .cescape, .cover .calt { position: absolute; left: 50%; top: calc(10px + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
                     border: 0; background: transparent; color: #7aa2ff; font: 600 13px/1.5 -apple-system, system-ui, sans-serif;
                     text-decoration: underline; padding: 10px 12px; cursor: pointer; white-space: nowrap; }
+                /* もう一方のアカウントで開き直す（「〇〇 の画面を見る」のすぐ下） */
+                .cover .calt { top: calc(50px + env(safe-area-inset-top, 0px)); color: #ffd76a; }
                 .gate { position: fixed; inset: 0; z-index: 8; pointer-events: auto; background: #0d0d12;
                         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
                         padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px)); text-align: center; color: #f2f2f4; }
@@ -1184,7 +1186,7 @@ const WP_SHIM = (() => {
                 <div class="update oldscript" hidden>⚠ 古い「Watch Party」が残っています。Userscripts アプリで「Watch Party」を削除してください（見られない・チャットが届かない原因になります）</div>
             </div>
             <a class="other" hidden></a>
-            <div class="cover" hidden><button class="cescape" type="button" hidden></button></div>
+            <div class="cover" hidden><button class="cescape" type="button" hidden></button><button class="calt" type="button" hidden></button></div>
             <button class="fab">💬<span class="badge" hidden></span></button>
             <div class="panel" hidden>
                 <div class="phead"><span>チャット <small class="ver"></small><span class="hstate"></span></span><button class="refix" title="再生がおかしいときに立て直す" aria-label="再生を立て直す">🔄</button><button class="pop" title="チャットを別の窓で開く" aria-label="チャットを別の窓で開く" hidden>⧉</button><button class="close" aria-label="閉じる">✕</button></div>
@@ -1839,8 +1841,17 @@ const WP_SHIM = (() => {
             let reloaded = false;
             try { reloaded = sessionStorage.getItem(AD_RELOAD_KEY) === target.room; } catch { /* 無視 */ }
             const oldScript = oldScriptSeen;
-            return s ? { json: s.json, mpd: s.mpd, mpdPruned: s.mpdPruned, periods: s.periods, errors: s.errors, reloaded, oldScript }
-                : { reloaded, oldScript };
+            /*
+             * **iPhone で広告が消えない理由を突き止めるための記録**（2026-10-14）。数と、動画の受け取り方の種類だけ。
+             * 9 月の実機では消えていたのに、今は配信リスト（.mpd）を1回も見ていない（mpd が毎回 0）。
+             * 動画をどう受け取っているか（src … 動画の入口の種類）・配信リストを誰が取りに行ったか（seen）・包みが残っているか（hooked）を見る
+             */
+            const mv = mainVideo();
+            const srcOf = (u) => (!u ? '' : u.startsWith('blob:') ? 'blob' : /\.m3u8/.test(u) ? 'm3u8' : /\.mpd/.test(u) ? 'mpd' : 'url');
+            const src = mv ? (srcOf(mv.currentSrc || mv.src || '') || (mv.srcObject ? 'obj' : '')) : '';
+            return s ? { json: s.json, mpd: s.mpd, mpdPruned: s.mpdPruned, periods: s.periods, errors: s.errors, reloaded, oldScript,
+                src, seen: s.seen, hooked: s.hooked, removed: s.removedEntries, keys: s.keys, at: s.at }
+                : { reloaded, oldScript, src };
         }
 
         /*
@@ -2173,6 +2184,13 @@ const WP_SHIM = (() => {
         // ホストは再生中なのにこちらが止まったままなら、タップしてもらう
         let blockedSince = 0;
         q('.cescape').addEventListener('click', () => { coverDismissed = true; render(); });
+        q('.calt').addEventListener('click', () => {
+            if (!hostVideo) return;
+            const script = { version: target.latest, date: target.latestDate, hub: target.hub };
+            const open = location.hostname === 'www.primevideo.com' ? U.urls.primeWeb : U.urls.primeVideoWeb;
+            const url = open(hostVideo, target.room, target.name, false, script);
+            if (url) location.href = url;
+        });
         q('.tap').addEventListener('click', () => {
             const v = mainVideo();
             if (IS_YOUTUBE) { applyVolume(true); try { youtubePlayer()?.playVideo(); } catch { /* 準備前 */ } }
@@ -2278,7 +2296,8 @@ const WP_SHIM = (() => {
         /** 広告の入った動画なのに、画面の時間表示での答え合わせ（目印）がまだ無いか */
         function needsClock() {
             if (!planInfo || !Array.isArray(planInfo.lens) || !Array.isArray(planInfo.anchors)) return false;
-            const ads = planInfo.lens.reduce((s, l) => s + (Number(l) || 0), 0);
+            // 枠の位置が分からないとき（ホストのプランに枠が無い）は lens が空なので、動画に入っている広告の合計（extra）も見る
+            const ads = Math.max(planInfo.lens.reduce((s, l) => s + (Number(l) || 0), 0), Number(planInfo.extra) || 0);
             return ads > 1 && planInfo.anchors.length === 0;
         }
 
@@ -2389,6 +2408,18 @@ const WP_SHIM = (() => {
                 if (esc.hidden !== !showEsc) esc.hidden = !showEsc;
                 if (showEsc && !esc.textContent) {
                     esc.textContent = `始まらないとき：${({ netflix: 'Netflix', youtube: 'YouTube' }[PAGE_SERVICE] || 'Amazon')} の画面を見る`;
+                }
+                /*
+                 * Prime はアカウントが2通り（amazon.co.jp／primevideo.com）あり、**違う方で開くと、エラーも出ずに再生が始まらない**
+                 * （2026-10-14 実機: Android で primevideo.com のほうを押して、ずっと待っていた）。
+                 * しばらく始まらなければ、もう一方のアカウントで開き直せるようにする
+                 */
+                const alt = q('.calt');
+                const showAlt = showEsc && PAGE_SERVICE === 'prime' && Boolean(hostVideo) && hostVideo.service === 'prime';
+                if (alt.hidden !== !showAlt) alt.hidden = !showAlt;
+                if (showAlt && !alt.textContent) {
+                    alt.textContent = location.hostname === 'www.primevideo.com'
+                        ? '再生できないとき：Amazon のアカウントで開き直す' : '再生できないとき：Prime Video のアカウントで開き直す';
                 }
             }
             if (centerKind) {
@@ -2757,7 +2788,43 @@ const WP_PRUNE = (() => {
     ];
 
     /** 何をどれだけ消したか（テストと記録用。作品の中身や鍵は持たない） */
-    const stats = { json: 0, removedEntries: {}, mpd: 0, mpdPruned: 0, periods: 0, errors: 0 };
+    const stats = { json: 0, removedEntries: {}, mpd: 0, mpdPruned: 0, periods: 0, errors: 0,
+        /*
+         * 効かなかったときに理由を突き止めるための記録（2026-10-14 iPhone 実機: 広告が流れた・配信リストを1回も見ていない）。
+         * **数と、項目の名前だけ**（作品名・アドレス・鍵は持たない）
+         *   seen … 配信リストらしい通信を、誰が何回取りに行ったか（f=fetch x=XHR r=ページの通信の記録。mpd / m3u8 の別）
+         *   keys … 再生情報の中にあった、広告らしい項目の場所（名前の道のり）。Amazon が項目の名前を変えていないかを見る
+         *   at   … 包んだときの読み込みの段階（loading なら最初に入れられた）
+         */
+        seen: {}, keys: [], at: '' };
+    let ownFetch = null, ownXhr = null;
+
+    function note(kind, url) {
+        try {
+            const m = /\.(mpd|m3u8)(?:[?#]|$)/.exec(String(url));
+            if (!m) return;
+            const k = kind + m[1];
+            stats.seen[k] = (stats.seen[k] || 0) + 1;
+        } catch { /* 無視 */ }
+    }
+
+    /** 広告らしい名前の項目の場所を集める（名前だけ。値は見ない）。並びは先頭の要素だけたどる */
+    const KEY_HINT = /cue|adbreak|interstitial|playlist|^ads?$|^ad[A-Z_]|[a-z]Ads?(?:[A-Z]|$)|pause/i;
+    function collectKeys(obj) {
+        let budget = 4000;
+        const visit = (node, path, depth) => {
+            if (!node || typeof node !== 'object' || depth > 7 || budget-- <= 0) return;
+            if (Array.isArray(node)) { if (node.length) visit(node[0], path + '[]', depth + 1); return; }
+            for (const key of Object.keys(node)) {
+                if (stats.keys.length >= 24) return;
+                const p = path ? path + '.' + key : key;
+                if (KEY_HINT.test(key) && /^[A-Za-z0-9_]{1,40}$/.test(key) && p.length <= 120 && !stats.keys.includes(p)) stats.keys.push(p);
+                visit(node[key], p, depth + 1);
+            }
+        };
+        visit(obj, '', 0);
+    }
+    const KEY_QUICK = /"(?:vodPlaybackUrls|vodPlaylistedPlaybackUrls|playbackUrls|cuepointPlaylist|intraTitlePlaylist)"/;
 
     const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
@@ -2849,6 +2916,9 @@ const WP_PRUNE = (() => {
         JSON.parse = function (text, reviver) {
             const obj = native.apply(this, arguments);
             try {
+                if (typeof text === 'string' && KEY_QUICK.test(text)) collectKeys(obj);
+            } catch { /* 記録だけなので無視 */ }
+            try {
                 if (typeof text === 'string' && QUICK.test(text)) prune(obj);
             } catch { stats.errors++; }
             return obj;
@@ -2864,6 +2934,7 @@ const WP_PRUNE = (() => {
         if (typeof native !== 'function') return;
         window.fetch = function (input) {
             const pending = native.apply(this, arguments);
+            note('f', urlOf(input));
             if (!MPD_URL.test(urlOf(input))) return pending;
             return pending.then((before) => before.clone().text().then((text) => {
                 const after = new Response(pruneMpdText(text),
@@ -2875,6 +2946,7 @@ const WP_PRUNE = (() => {
                 return after;
             }).catch(() => before));
         };
+        ownFetch = window.fetch;
     }
 
     function wrapXhr() {
@@ -2900,6 +2972,7 @@ const WP_PRUNE = (() => {
         };
         class XMLHttpRequest extends Native {
             open(method, url, ...rest) {
+                note('x', url);
                 try { if (MPD_URL.test(String(url))) marked.set(this, {}); } catch { /* 無視 */ }
                 return super.open(method, url, ...rest);
             }
@@ -2908,6 +2981,21 @@ const WP_PRUNE = (() => {
             get responseXML() { return pruned(this, super.responseXML); }
         }
         window.XMLHttpRequest = XMLHttpRequest;
+        ownXhr = XMLHttpRequest;
+    }
+
+    /** ページの通信の記録から、配信リストを数える（包みを通らなかったもの＝動画の部品が自分で取りに行ったものも入る） */
+    function watchResources() {
+        if (typeof PerformanceObserver !== 'function') return;
+        const obs = new PerformanceObserver((list) => { for (const e of list.getEntries()) note('r', e.name); });
+        obs.observe({ type: 'resource', buffered: true });
+    }
+
+    /** 記録用: いまも自分の包みが入っているか（後から別のものに置き換えられていないか） */
+    function snapshot() {
+        const out = JSON.parse(JSON.stringify(stats));
+        out.hooked = (ownFetch ? (window.fetch === ownFetch ? 'f' : 'F') : '-') + (ownXhr ? (window.XMLHttpRequest === ownXhr ? 'x' : 'X') : '-');
+        return out;
     }
 
     /** 包む。**一度だけ**。 */
@@ -2915,7 +3003,9 @@ const WP_PRUNE = (() => {
         if (globalThis.__wpPruneAds) return false;
         globalThis.__wpPruneAds = true;
         // 本物の Amazon で実際に何を消したかを、テスト（e2e-userscript-real）から読むため。数だけで中身は持たない
-        try { Object.defineProperty(globalThis, '__wpPruneStats', { value: () => JSON.parse(JSON.stringify(stats)) }); } catch { /* 無視 */ }
+        try { Object.defineProperty(globalThis, '__wpPruneStats', { value: snapshot }); } catch { /* 無視 */ }
+        try { stats.at = String(document.readyState).slice(0, 12); } catch { /* 無視 */ }
+        try { watchResources(); } catch { /* 無視 */ }
         wrapJsonParse();
         if (!SKIP.includes('mpd')) {
             try { wrapFetch(); } catch { stats.errors++; }
@@ -2924,7 +3014,7 @@ const WP_PRUNE = (() => {
         return true;
     }
 
-    return { install, prune, pruneMpdText, stats: () => JSON.parse(JSON.stringify(stats)) };
+    return { install, prune, pruneMpdText, stats: snapshot };
 })();
 
 
@@ -3435,13 +3525,42 @@ const WP_PRUNE = (() => {
 
         /** 枠ごとの広告の長さ（秒）。使えないときは null */
         _planLens() {
+            const steps = this._planSteps();
+            return steps ? steps.lens : null;
+        }
+
+        /*
+         * **枠の位置が分からないとき**（2026-10-14 iPhone 実機）。ホストのプランには広告の枠が1つも無いのに、
+         * ゲストの動画には広告が入っていた（動画 7520.8 秒 / 本編 7446 秒）。枠が無いと長さを割り振る先が無く、
+         * 画面の時間表示で「74.4 秒ずれている」と分かっていたのに使われず、ゲストが 74 秒遅れたままだった。
+         * 枠の代わりに、流れた広告（測った位置と長さ）と目印から、広告の位置を見立てる:
+         *   - 目印の位置までの広告の合計が、分かっている分より多ければ、足りない分を「前の目印のすぐ後ろ」に置く
+         *     （本当の位置は前の目印とこの目印の間のどこか。間で時間表示を読めれば目印が増えて、位置が狭まる）
+         *   - 最後の目印より後ろの分は、位置が分からないので何もしない（そこで時間表示を読めたら分かる）
+         */
+        _looseSteps(total) {
+            const steps = this._ads.map(a => ({ pos: a.contentPos, len: a.len }));
+            const sum = (to) => steps.reduce((s, x) => s + (x.pos <= to ? x.len : 0), 0);
+            let prev = null;
+            for (const a of this._anchors || []) {
+                const need = Math.min(a.offset - sum(a.content), total - sum(Infinity));
+                if (need > 1) steps.push({ pos: prev === null ? 0 : prev + 1, len: need });
+                prev = a.content;
+            }
+            steps.sort((a, b) => a.pos - b.pos);
+            return { pos: steps.map(s => s.pos), lens: steps.map(s => s.len) };
+        }
+
+        /** 広告の位置（本編の秒）と長さ（秒）の並び。使えないときは null */
+        _planSteps() {
             const plan = this._plan, v = this._video;
             if (!plan || !v || !Number.isFinite(v.duration)) return null;
             const total = v.duration - plan.fullSec;
             // 本編の長さと合わない（別の作品のプランなど）なら使わない
             if (total < -5 || total > 1800) return null;
             const n = plan.breaks.length;
-            if (total < 1 || n === 0) return plan.breaks.map(() => 0);
+            if (total < 1) return { pos: plan.breaks, lens: plan.breaks.map(() => 0) };
+            if (n === 0) return this._looseSteps(total);
             // 流れた広告は測った長さ
             const lens = plan.breaks.map(pos => {
                 const ad = this._ads.find(a => Math.abs(a.contentPos - pos) < 5);
@@ -3473,18 +3592,21 @@ const WP_PRUNE = (() => {
             // 残り（最後の目印より後）には、合計から決まった分を引いた残りを等分する
             const unknown = lens.map((l, i) => (l === null ? i : -1)).filter(i => i >= 0);
             const each = unknown.length ? Math.max(0, (total - sumTo(n)) / unknown.length) : 0;
-            return lens.map(l => (l === null ? each : l));
+            return { pos: plan.breaks, lens: lens.map(l => (l === null ? each : l)) };
         }
 
         /** <video> の時間 → 本編の時間 */
         _toContent(elem) {
-            const lens = this._planLens();
-            if (lens) {
+            const steps = this._planSteps();
+            if (steps) {
+                const { pos, lens } = steps;
+                // いま流れている広告（まだ長さを測り終えていない）。枠の位置が分からないときは、ここでしか分からない
+                if (!this._plan.breaks.length && this._adOpen && elem >= this._adOpen.elemStart) return this._adOpen.contentPos;
                 let off = 0;
                 for (let i = 0; i < lens.length; i++) {
-                    const start = this._plan.breaks[i] + off;
+                    const start = pos[i] + off;
                     if (elem < start) return Math.max(0, elem - off);
-                    if (elem < start + lens[i]) return this._plan.breaks[i];   // 広告の途中。本編は止まっている
+                    if (elem < start + lens[i]) return pos[i];   // 広告の途中。本編は止まっている
                     off += lens[i];
                 }
                 return Math.max(0, elem - off);
@@ -3500,11 +3622,11 @@ const WP_PRUNE = (() => {
 
         /** 本編の時間 → <video> の時間（その位置より前の広告の分だけ後ろにずらす） */
         _toElem(content) {
-            const lens = this._planLens();
-            if (lens) {
+            const steps = this._planSteps();
+            if (steps) {
                 // その位置より前（同じ位置を含む）の枠の広告を足す。枠の位置ちょうどなら広告の後ろへ
                 let off = 0;
-                for (let i = 0; i < lens.length; i++) if (this._plan.breaks[i] <= content + 0.5) off += lens[i];
+                for (let i = 0; i < steps.lens.length; i++) if (steps.pos[i] <= content + 0.5) off += steps.lens[i];
                 return content + off;
             }
             let offset = 0;
@@ -3517,12 +3639,16 @@ const WP_PRUNE = (() => {
         /** 記録用の短いまとめ（本編の長さ・枠の位置・割り振った長さ） */
         planSummary() {
             if (!this._plan) return null;
-            const lens = this._planLens();
+            const steps = this._planSteps();
+            const v = this._video;
             return {
                 full: Math.round(this._plan.fullSec), own: this._plan.own,
-                breaks: this._plan.breaks.map(s => Math.round(s)),
+                // 枠が無くて見立てた位置（_looseSteps）のときは、その位置が入る
+                breaks: (steps ? steps.pos : this._plan.breaks).map(s => Math.round(s)),
                 anchors: (this._anchors || []).map(a => [Math.round(a.content), Math.round(a.offset * 10) / 10]),
-                lens: lens ? lens.map(l => Math.round(l * 10) / 10) : null
+                lens: steps ? steps.lens.map(l => Math.round(l * 10) / 10) : null,
+                // 動画に入っている広告の合計（動画の長さ − 本編の長さ）。枠が無くても「広告が入っている」と分かるように
+                extra: steps && v && Number.isFinite(v.duration) ? Math.max(0, Math.round((v.duration - this._plan.fullSec) * 10) / 10) : 0
             };
         }
 
