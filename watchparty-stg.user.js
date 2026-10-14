@@ -2809,7 +2809,7 @@ const WP_PRUNE = (() => {
     }
 
     /** 広告らしい名前の項目の場所を集める（名前だけ。値は見ない）。並びは先頭の要素だけたどる */
-    const KEY_HINT = /cue|adbreak|interstitial|playlist|^ads?$|^ad[A-Z_]|[a-z]Ads?(?:[A-Z]|$)|pause/i;
+    const KEY_HINT = { test: (k) => /cue|adbreak|interstitial|playlist|pause/i.test(k) || /^ads?$|^ad[A-Z_]|[a-z]Ads?(?:[A-Z]|$)/.test(k) };
     function collectKeys(obj) {
         let budget = 4000;
         const visit = (node, path, depth) => {
