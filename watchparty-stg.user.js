@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.32
+// @version      1.0.33
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.32";
+    const __WP_VERSION__ = "1.0.33";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -330,6 +330,14 @@ const WP_US = (() => {
         return m && m.type === 'user' ? [m.timestamp, m.username, m.content].map(String).join('') : null;
     }
 
+    /** 発言の日付（YYYY/MM/DD。この端末の時刻で）。時刻が読めなければ空（2026-10-15 ユーザー要望） */
+    function dateText(m) {
+        const t = Date.parse(m && m.timestamp);
+        if (!Number.isFinite(t)) return '';
+        const d = new Date(t);
+        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+    }
+
     /** チャットの1件を、文字だけで組み立てる */
     function messageRow(m, me) {
         const row = document.createElement('div');
@@ -349,7 +357,13 @@ const WP_US = (() => {
         const body = document.createElement('span');
         body.className = 'body';
         body.textContent = content;
-        row.append(who, body);
+        const ts = dateText(m);
+        if (ts) {
+            const when = document.createElement('span');
+            when.className = 'ts';
+            when.textContent = ts;
+            row.append(who, when, body);
+        } else row.append(who, body);
         return row;
     }
 
@@ -369,7 +383,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, ENV_TAG, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, HUB_ID_RE, hubUrl, safeColor, isReaction, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
+    return { SERVER, ENV_TAG, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, HUB_ID_RE, hubUrl, safeColor, isReaction, dateText, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -1116,6 +1130,7 @@ const WP_SHIM = (() => {
                 .panel[data-newest="top"] .msgs > :first-child { margin-top: 0; }
                 .msg { word-break: break-word; flex: none; }
                 .msg .name { font-weight: 700; margin-right: 6px; }
+                .msg .ts { font-size: 10px; font-weight: 400; opacity: .5; margin-right: 6px; white-space: nowrap; }
                 .msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
                 .msg.system { color: #9a9aa6; font-size: 12px; text-align: center; }
                 /* 入退出などのお知らせは、チャットの流れに混ぜず、この1行を上書きして出す（2026-09-14 ユーザー要望） */
