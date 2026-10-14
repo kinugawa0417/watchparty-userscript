@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.31
+// @version      1.0.32
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.31";
+    const __WP_VERSION__ = "1.0.32";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -1849,7 +1849,7 @@ const WP_SHIM = (() => {
             const mv = mainVideo();
             const srcOf = (u) => (!u ? '' : u.startsWith('blob:') ? 'blob' : /\.m3u8/.test(u) ? 'm3u8' : /\.mpd/.test(u) ? 'mpd' : 'url');
             const src = mv ? (srcOf(mv.currentSrc || mv.src || '') || (mv.srcObject ? 'obj' : '')) : '';
-            return s ? { json: s.json, mpd: s.mpd, mpdPruned: s.mpdPruned, periods: s.periods, errors: s.errors, reloaded, oldScript,
+            return s ? { json: s.json, mpd: s.mpd, mpdPruned: s.mpdPruned, periods: s.periods, errors: s.errors, hls: s.hls, reloaded, oldScript,
                 src, seen: s.seen, hooked: s.hooked, removed: s.removedEntries, keys: s.keys, at: s.at }
                 : { reloaded, oldScript, src };
         }
@@ -2732,6 +2732,11 @@ const WP_SHIM = (() => {
  *   ② xml-prune  … 動画の配信リスト（.mpd）から**広告の区間そのもの**を消す。`fetch` と XHR の返事を書き換える。
  *                  あわせて全体の長さと各区間の開始位置も消し、プレイヤーに時間を計算し直させる
  * 最初は①だけを入れていたが、別の会話の調べで**実際に効いているのは②**と分かった（2026-09-25）。
+ *   ③ HLS（iPhone）… 配信リスト（.m3u8）の**アドレスから「広告を差し込む印」を外す**（2026-10-14 実機で解明）。
+ *                  iPhone の Safari は配信の形式が違い（.mpd ではなく .m3u8）、しかも動画の部品が自分で取りに行くので、
+ *                  ②のように返事を書き換えられない。調べたら、アドレスの途中に `1@…`（35 文字ほど）という部分があり、
+ *                  **これを外したアドレスは、本編だけの配信リストを返す**（広告 30 秒×3 本が入っていた作品で、長さが本編ちょうどになった。
+ *                  映像・音声・動画本体とも取れる）。ページがリストを取りに行くとき・動画に渡すときに外す。Brave の指定には無い、こちらで見つけた方法
  *
  * ■ 消し方は uBlock（Brave が使っているもの）の決まりに合わせる
  * `intraTitlePlaylist.[-].shouldShowOnScrubBar` は「その項目を持つ**要素を並びから取り除く**」という意味
@@ -2787,8 +2792,14 @@ const WP_PRUNE = (() => {
             ' | /*[name()="MPD"][.//*[name()="BaseURL" and contains(text(),"/interstitial/")]]/*[name()="Period"]/@start' },
     ];
 
+    /*
+     * ③ HLS の配信リストのアドレスにある「広告を差し込む印」。`/1@` ＋英数字 のひと区切り（実機: `1@` ＋ 33 文字）。
+     * .m3u8 のアドレスにこれがあるときだけ、その区切りを取り除く
+     */
+    const HLS_TOKEN = /\/\d@[A-Za-z0-9]{16,60}(?=\/)/;
+
     /** 何をどれだけ消したか（テストと記録用。作品の中身や鍵は持たない） */
-    const stats = { json: 0, removedEntries: {}, mpd: 0, mpdPruned: 0, periods: 0, errors: 0,
+    const stats = { json: 0, removedEntries: {}, mpd: 0, mpdPruned: 0, periods: 0, errors: 0, hls: 0,
         /*
          * 効かなかったときに理由を突き止めるための記録（2026-10-14 iPhone 実機: 広告が流れた・配信リストを1回も見ていない）。
          * **数と、項目の名前だけ**（作品名・アドレス・鍵は持たない）
@@ -2903,6 +2914,34 @@ const WP_PRUNE = (() => {
         }
     }
 
+    /** HLS の配信リストのアドレスから、広告を差し込む印を外す。関係のないアドレスはそのまま返す */
+    function fixHlsUrl(url) {
+        try {
+            if (typeof url !== 'string' || url.indexOf('.m3u8') < 0 || !HLS_TOKEN.test(url)) return url;
+            stats.hls++;
+            return url.replace(HLS_TOKEN, '');
+        } catch { stats.errors++; return url; }
+    }
+
+    /** 動画の部品に渡すアドレス（video.src など）でも外す。ページが別の道で渡したときの備え */
+    function wrapMediaSrc() {
+        const wrapProp = (proto) => {
+            const d = Object.getOwnPropertyDescriptor(proto, 'src');
+            if (!d || !d.set || !d.get) return;
+            Object.defineProperty(proto, 'src', { configurable: true, enumerable: d.enumerable,
+                get() { return d.get.call(this); }, set(v) { d.set.call(this, fixHlsUrl(String(v))); } });
+        };
+        wrapProp(HTMLMediaElement.prototype);
+        wrapProp(HTMLSourceElement.prototype);
+        const setAttribute = Element.prototype.setAttribute;
+        Element.prototype.setAttribute = function (name, value) {
+            if ((this instanceof HTMLMediaElement || this instanceof HTMLSourceElement) && String(name).toLowerCase() === 'src') {
+                return setAttribute.call(this, name, fixHlsUrl(String(value)));
+            }
+            return setAttribute.apply(this, arguments);
+        };
+    }
+
     function urlOf(input) {
         try {
             if (typeof input === 'string') return input;
@@ -2933,7 +2972,15 @@ const WP_PRUNE = (() => {
         const native = window.fetch;
         if (typeof native !== 'function') return;
         window.fetch = function (input) {
-            const pending = native.apply(this, arguments);
+            const args = Array.from(arguments);
+            if (!SKIP.includes('hls')) {
+                try {
+                    const before = urlOf(input);
+                    const fixed = fixHlsUrl(before);
+                    if (fixed !== before) args[0] = input instanceof Request ? new Request(fixed, input) : fixed;
+                } catch { stats.errors++; }
+            }
+            const pending = native.apply(this, args);
             note('f', urlOf(input));
             if (!MPD_URL.test(urlOf(input))) return pending;
             return pending.then((before) => before.clone().text().then((text) => {
@@ -2974,6 +3021,7 @@ const WP_PRUNE = (() => {
             open(method, url, ...rest) {
                 note('x', url);
                 try { if (MPD_URL.test(String(url))) marked.set(this, {}); } catch { /* 無視 */ }
+                if (!SKIP.includes('hls') && typeof url === 'string') url = fixHlsUrl(url);
                 return super.open(method, url, ...rest);
             }
             get response() { return pruned(this, super.response); }
@@ -3007,14 +3055,16 @@ const WP_PRUNE = (() => {
         try { stats.at = String(document.readyState).slice(0, 12); } catch { /* 無視 */ }
         try { watchResources(); } catch { /* 無視 */ }
         wrapJsonParse();
-        if (!SKIP.includes('mpd')) {
+        // fetch と XHR の包みは ②（.mpd）と ③（HLS のアドレス）で共用。片方だけ外しても、もう片方は中で見分けて動く
+        if (!SKIP.includes('mpd') || !SKIP.includes('hls')) {
             try { wrapFetch(); } catch { stats.errors++; }
             try { wrapXhr(); } catch { stats.errors++; }
         }
+        if (!SKIP.includes('hls')) { try { wrapMediaSrc(); } catch { stats.errors++; } }
         return true;
     }
 
-    return { install, prune, pruneMpdText, stats: snapshot };
+    return { install, prune, pruneMpdText, fixHlsUrl, stats: snapshot };
 })();
 
 
