@@ -4848,6 +4848,12 @@ const WP_PRUNE = (() => {
     let hostPaused = false;      // ホストが止まっているか（表示用）
     let startup = false;         // プレイヤーが開いた直後か（STARTUP_*）
     let deferredStop = false;    // 開いた直後に「止まって待つ」を後回しにしたか
+    /*
+     * ホストが上映を終了したあとか（次にホストの位置が届くまで）。
+     * 終了が「合わせ込みの途中」に来ると、後回しにしていた再生（少し待ってから再生、など）が終了のあとに動いて、
+     * 止めたはずの動画が流れ出した（2026-10-14 本物の Prime のテストで3回続けて再現。読み込みが遅い日に出る）
+     */
+    let stopped = false;
     let isHost = false;          // ui.js から教わる（このスクリプトは拡張機能の状態を直接見られない）
     let lastTickDropReport = 0;  // 調査用（follow から抜けられない件）。記録の間引きに使う
     /*
@@ -4900,6 +4906,7 @@ const WP_PRUNE = (() => {
 
     /** ホストの位置（本編の時間）へ追いつく。ホストが再生中のときだけ使う */
     function catchUp(target, threshold) {
+        if (stopped) return;
         const now = Date.now();
         if (settlePending(now)) {
             // 飛んだ先で読み込み中。飛び直さず、再生の指示だけ出して待つ
@@ -4915,7 +4922,7 @@ const WP_PRUNE = (() => {
             settle.trimmed = true;
             adapter.pause();
             const waitMs = Math.round(-diff * 1000);
-            setTimeout(() => { if (!hostPaused && !hostAd) withEchoGuard(() => adapter.play()); }, waitMs);
+            setTimeout(() => { if (!stopped && !hostPaused && !hostAd) withEchoGuard(() => adapter.play()); }, waitMs);
             return;
         }
         if (Math.abs(diff) > threshold) {
@@ -5028,6 +5035,7 @@ const WP_PRUNE = (() => {
         // 直前の定期通知の位置（0 秒の知らせを1回だけ見送るため）
         if (type !== 'tick' || currentTime >= 5) { lastTickTime = currentTime; zeroTickOnce = false; }
         lastApplyAt = Date.now();
+        stopped = false;   // ホストの位置が届いた＝上映が（また）始まっている
 
         // ホストが広告中かは定期通知で分かる。広告中のホストは操作を送らないので、
         // 操作が届いたなら広告は終わっている
@@ -5132,7 +5140,10 @@ const WP_PRUNE = (() => {
         } else if (data.type === 'STOP') {
             // ホストが上映を終了した。合わせるのをやめて、その場で止める（次に作品が送られるまで動かさない）
             if (bound && !isHost) {
+                stopped = true;
                 stopFollowing();
+                startup = false;
+                deferredStop = false;
                 lastApplyAt = 0;
                 withEchoGuard(() => adapter.pause());
                 postStatus();
@@ -5441,7 +5452,7 @@ const WP_PRUNE = (() => {
                     if (ahead > 0.3 && ahead < settle.lead + 2) {
                         settle.trimmed = true;
                         withEchoGuard(() => adapter.pause());
-                        setTimeout(() => { if (!hostPaused && !hostAd) withEchoGuard(() => adapter.play()); }, Math.round(ahead * 1000));
+                        setTimeout(() => { if (!stopped && !hostPaused && !hostAd) withEchoGuard(() => adapter.play()); }, Math.round(ahead * 1000));
                     }
                 }
                 // 飛んでから動き出すまでの時間 → 次に先へ飛ぶ量（1〜10秒。少しずつ覚え直す）
