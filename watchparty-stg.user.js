@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.34
+// @version      1.0.35
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.34";
+    const __WP_VERSION__ = "1.0.35";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -238,6 +238,17 @@ const WP_US = (() => {
         },
 
         /**
+         * スクリプトが入っているかの検査用（2026-11-23）。Amazon のトップ寄りのページ（作品ページ以外）に、ルームとなまえを付けて開く。
+         * スクリプトが動いていれば、そのページに「KINUGAWA Party Theater」の画面が出て、招待ページには版が届く。
+         * 作品に関係なく、ホストが何も流していなくても確かめられる
+         */
+        scriptCheck(room, name, android, script) {
+            const q = `wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
+            const path = `www.amazon.co.jp/gp/video/storefront/?${q}#${q}`;
+            return android ? urls.firefox(`https://${path}`) : `https://${path}`;
+        },
+
+        /**
          * Prime Video だけ契約の人（primevideo.com のアカウント。海外など）向けに、primevideo.com で開く形（2026-09-14）。
          * amazon.co.jp にはログインできないので、こちらで開く。作品 ID は国をまたいで同じ作品を指す GTI があればそれ、
          * 無ければ ASIN（primevideo.com/detail/<ASIN>/ でも同じ作品が開くことを確認済み）。
@@ -335,7 +346,8 @@ const WP_US = (() => {
         const t = Date.parse(m && m.timestamp);
         if (!Number.isFinite(t)) return '';
         const d = new Date(t);
-        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ` +
+            `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     }
 
     /** チャットの1件を、文字だけで組み立てる */
@@ -357,13 +369,18 @@ const WP_US = (() => {
         const body = document.createElement('span');
         body.className = 'body';
         body.textContent = content;
+        // 名前の下に、日付と時刻を小さく（2026-11-23 ユーザー要望: いつの発言か分からない）
         const ts = dateText(m);
+        const head = document.createElement('span');
+        head.className = 'who';
+        head.append(who);
         if (ts) {
             const when = document.createElement('span');
             when.className = 'ts';
             when.textContent = ts;
-            row.append(who, when, body);
-        } else row.append(who, body);
+            head.append(when);
+        }
+        row.append(head, body);
         return row;
     }
 
@@ -376,6 +393,9 @@ const WP_US = (() => {
         el.classList.remove('fresh');
         void el.offsetWidth;   // 同じ知らせが続いても、もう一度光らせる
         el.classList.add('fresh');
+        // 10秒たったら消す（2026-11-23 ユーザー要望: 入室のお知らせが出っぱなしになる）。新しい知らせが来たら数え直す
+        clearTimeout(el._wpHide);
+        if (el.textContent) el._wpHide = setTimeout(() => { el.hidden = true; el.textContent = ''; el.title = ''; }, 10000);
     }
 
     /** サーバーへつなぐ（socket.io はこのスクリプトの中に入れてある） */
@@ -1129,8 +1149,12 @@ const WP_SHIM = (() => {
                 .panel[data-newest="top"] .notice { order: -2; }
                 .panel[data-newest="top"] .msgs > :first-child { margin-top: 0; }
                 .msg { word-break: break-word; flex: none; }
-                .msg .name { font-weight: 700; margin-right: 6px; }
-                .msg .ts { font-size: 10px; font-weight: 400; opacity: .5; margin-right: 6px; white-space: nowrap; }
+                .msg { display: flex; align-items: flex-start; gap: 8px; }
+                .msg .who { flex: none; display: flex; flex-direction: column; max-width: 46%; min-width: 0; }
+                .msg .name { font-weight: 700; margin-right: 0; overflow-wrap: anywhere; }
+                .msg .ts { font-size: 10px; font-weight: 400; opacity: .5; margin-right: 0; line-height: 1.3; white-space: nowrap; }
+                .msg .body { flex: 1; min-width: 0; }
+                .msg.system { display: block; }
                 .msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
                 .msg.system { color: #9a9aa6; font-size: 12px; text-align: center; }
                 /* 入退出などのお知らせは、チャットの流れに混ぜず、この1行を上書きして出す（2026-09-14 ユーザー要望） */
@@ -2044,39 +2068,12 @@ const WP_SHIM = (() => {
             });
         }
         /*
-         * **打っている間（入力欄にフォーカスがある間）だけ、入力フォームをキーボードの上へ浮かせる**（2026-09-20 ユーザー要望・実機）。
-         * チャット欄そのものは下のままでよく、隠れても困らない。**映像は隠してはいけない。**
-         * Firefox Android はキーボードが出てもビューポートが縮まない（ih=767 に対し vvh=801）ので
-         * 高さを測れない。実機の写真で測るとキーボードは画面の3割半ほどだったので、4割の位置に置いて余裕を見る。
-         *
-         * **フォーカスが外れたら必ず元に戻す**（2026-10-15 実機: 送信の瞬間にしか見ておらず、キーボードを閉じても
-         * 入力欄が画面の真ん中に浮いたまま止まっていた。送信のときの処理の中に書いてあったのが原因）。
+         * 入力欄は**浮かせない**（2026-11-23 ユーザー判断）。スマホでは、チャット枠の上（映像のすぐ下）に固定しておく。
+         * 以前は Android で打っている間だけ画面の4割の高さへ浮かせていたが、キーボードを「戻る」で閉じても
+         * フォーカスが外れず、入力欄が画面の途中に残ってしまった。位置が変わらなければ、この問題は起きない。
+         * （チャット枠は映像の下から始まるので、入力欄は枠の一番上＝キーボードの上に見える）
          */
-        function floatForm() {
-            const form = q('form');
-            const input = q('form input');
-            if (!form || !input) return;
-            if (IS_ANDROID && root.activeElement === input) {
-                form.style.position = 'fixed';
-                form.style.left = '8px';
-                form.style.right = '8px';
-                form.style.bottom = `${Math.round(window.innerHeight * 0.4)}px`;
-                form.style.zIndex = '10';
-            } else {
-                form.style.position = '';
-                form.style.left = ''; form.style.right = '';
-                form.style.bottom = ''; form.style.zIndex = '';
-            }
-        }
-        {
-            const input = q('form input');
-            // フォーカスの移り変わりが落ち着いてから見る（外れた直後は activeElement がまだ入力欄のことがある）
-            const later = () => setTimeout(floatForm, 0);
-            input.addEventListener('focus', later);
-            input.addEventListener('blur', later);
-            globalThis.addEventListener('pagehide', floatForm);
-            globalThis.visualViewport?.addEventListener('resize', later);
-        }
+        function floatForm() { /* 何もしない（互換のため残す） */ }
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
             const input = q('form input');
