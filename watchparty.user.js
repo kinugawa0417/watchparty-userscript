@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KINUGAWA Party Theater（Prime を自動で合わせる）
 // @namespace    watchparty-fixed
-// @version      1.0.32
+// @version      1.0.35
 // @description  友だちと一緒に Prime Video / Netflix / YouTube を見るとき、ホストの再生位置に自動で合わせます。KINUGAWA Party Theater の画面の「ブラウザで見る」から開いたときだけ動きます。
 // @match        https://www.amazon.co.jp/*
 // @match        https://www.primevideo.com/*
@@ -53,7 +53,7 @@
     // 招待ページのドメイン（環境で違う。PC のゲストがチャットを別の窓で開くのに使う）
     const __WP_HUB_HOST__ = __WP_HUBS__[__WP_TAG__];
     // 入っているスクリプトの版（チャット欄の見出しに出す。入れ直せたかを確かめられるように）
-    const __WP_VERSION__ = "1.0.32";
+    const __WP_VERSION__ = "1.0.35";
 
     // ---- socket.io クライアント（サーバーから取らず、ここに入れておく）----
     // ページに io という名前を残さないよう、読み込んだら取り出して元に戻す
@@ -238,6 +238,17 @@ const WP_US = (() => {
         },
 
         /**
+         * スクリプトが入っているかの検査用（2026-11-23）。Amazon のトップ寄りのページ（作品ページ以外）に、ルームとなまえを付けて開く。
+         * スクリプトが動いていれば、そのページに「KINUGAWA Party Theater」の画面が出て、招待ページには版が届く。
+         * 作品に関係なく、ホストが何も流していなくても確かめられる
+         */
+        scriptCheck(room, name, android, script) {
+            const q = `wp=${enc(room)}&wpn=${enc(name)}${scriptQuery(script)}`;
+            const path = `www.amazon.co.jp/gp/video/storefront/?${q}#${q}`;
+            return android ? urls.firefox(`https://${path}`) : `https://${path}`;
+        },
+
+        /**
          * Prime Video だけ契約の人（primevideo.com のアカウント。海外など）向けに、primevideo.com で開く形（2026-09-14）。
          * amazon.co.jp にはログインできないので、こちらで開く。作品 ID は国をまたいで同じ作品を指す GTI があればそれ、
          * 無ければ ASIN（primevideo.com/detail/<ASIN>/ でも同じ作品が開くことを確認済み）。
@@ -330,6 +341,15 @@ const WP_US = (() => {
         return m && m.type === 'user' ? [m.timestamp, m.username, m.content].map(String).join('') : null;
     }
 
+    /** 発言の日付（YYYY/MM/DD。この端末の時刻で）。時刻が読めなければ空（2026-10-15 ユーザー要望） */
+    function dateText(m) {
+        const t = Date.parse(m && m.timestamp);
+        if (!Number.isFinite(t)) return '';
+        const d = new Date(t);
+        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ` +
+            `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+
     /** チャットの1件を、文字だけで組み立てる */
     function messageRow(m, me) {
         const row = document.createElement('div');
@@ -349,7 +369,18 @@ const WP_US = (() => {
         const body = document.createElement('span');
         body.className = 'body';
         body.textContent = content;
-        row.append(who, body);
+        // 名前の下に、日付と時刻を小さく（2026-11-23 ユーザー要望: いつの発言か分からない）
+        const ts = dateText(m);
+        const head = document.createElement('span');
+        head.className = 'who';
+        head.append(who);
+        if (ts) {
+            const when = document.createElement('span');
+            when.className = 'ts';
+            when.textContent = ts;
+            head.append(when);
+        }
+        row.append(head, body);
         return row;
     }
 
@@ -362,6 +393,9 @@ const WP_US = (() => {
         el.classList.remove('fresh');
         void el.offsetWidth;   // 同じ知らせが続いても、もう一度光らせる
         el.classList.add('fresh');
+        // 10秒たったら消す（2026-11-23 ユーザー要望: 入室のお知らせが出っぱなしになる）。新しい知らせが来たら数え直す
+        clearTimeout(el._wpHide);
+        if (el.textContent) el._wpHide = setTimeout(() => { el.hidden = true; el.textContent = ''; el.title = ''; }, 10000);
     }
 
     /** サーバーへつなぐ（socket.io はこのスクリプトの中に入れてある） */
@@ -369,7 +403,7 @@ const WP_US = (() => {
         return __WP_IO__(SERVER, { transports: ['websocket', 'polling'], reconnection: true });
     }
 
-    return { SERVER, ENV_TAG, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, HUB_ID_RE, hubUrl, safeColor, isReaction, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
+    return { SERVER, ENV_TAG, cleanVideo, cleanPlan, cleanSec, cleanRoom, hhmmss, urls, olderVersion, dateLabel, VERSION_RE, DATE_RE, HUB_ID_RE, hubUrl, safeColor, isReaction, dateText, messageRow, messageKey, showNotice, connect, FIREFOX_PLAY_URL, VIOLENTMONKEY_URL };
 })();
 
 
@@ -1115,7 +1149,12 @@ const WP_SHIM = (() => {
                 .panel[data-newest="top"] .notice { order: -2; }
                 .panel[data-newest="top"] .msgs > :first-child { margin-top: 0; }
                 .msg { word-break: break-word; flex: none; }
-                .msg .name { font-weight: 700; margin-right: 6px; }
+                .msg { display: flex; align-items: flex-start; gap: 8px; }
+                .msg .who { flex: none; display: flex; flex-direction: column; max-width: 46%; min-width: 0; }
+                .msg .name { font-weight: 700; margin-right: 0; overflow-wrap: anywhere; }
+                .msg .ts { font-size: 10px; font-weight: 400; opacity: .5; margin-right: 0; line-height: 1.3; white-space: nowrap; }
+                .msg .body { flex: 1; min-width: 0; }
+                .msg.system { display: block; }
                 .msg.me .body { background: rgba(58,109,240,.35); border-radius: 6px; padding: 1px 5px; }
                 .msg.system { color: #9a9aa6; font-size: 12px; text-align: center; }
                 /* 入退出などのお知らせは、チャットの流れに混ぜず、この1行を上書きして出す（2026-09-14 ユーザー要望） */
@@ -2028,6 +2067,13 @@ const WP_SHIM = (() => {
                 if (form.requestSubmit) form.requestSubmit(); else form.dispatchEvent(new Event('submit', { cancelable: true }));
             });
         }
+        /*
+         * 入力欄は**浮かせない**（2026-11-23 ユーザー判断）。スマホでは、チャット枠の上（映像のすぐ下）に固定しておく。
+         * 以前は Android で打っている間だけ画面の4割の高さへ浮かせていたが、キーボードを「戻る」で閉じても
+         * フォーカスが外れず、入力欄が画面の途中に残ってしまった。位置が変わらなければ、この問題は起きない。
+         * （チャット枠は映像の下から始まるので、入力欄は枠の一番上＝キーボードの上に見える）
+         */
+        function floatForm() { /* 何もしない（互換のため残す） */ }
         q('form').addEventListener('submit', (e) => {
             e.preventDefault();
             const input = q('form input');
@@ -2036,28 +2082,7 @@ const WP_SHIM = (() => {
             socket.emit('send-message', { message: text });
             input.value = '';
             stickLatest = true;
-            /*
-             * **打っている間は、入力フォームだけをキーボードの上へ浮かせる**（2026-09-20 ユーザー要望・実機）。
-             * チャット欄そのものは下のままでよく、隠れても困らない。**映像は隠してはいけない。**
-             * Firefox Android はキーボードが出てもビューポートが縮まない（ih=767 に対し vvh=801）ので
-             * 高さを測れない。実機の写真で測るとキーボードは画面の3割半ほどだったので、4割の位置に置いて余裕を見る。
-             */
-            const form = q('form');
-            // 以前はここで決めていない composing を見ていて、Android で送るたびに例外が出ていた（2026-10-14 実機の記録で判明）
-            const composing = !IS_DESKTOP && root.activeElement === input;
-            if (form) {
-                if (IS_ANDROID && composing) {
-                    form.style.position = 'fixed';
-                    form.style.left = '8px';
-                    form.style.right = '8px';
-                    form.style.bottom = `${Math.round(window.innerHeight * 0.4)}px`;
-                    form.style.zIndex = '10';
-                } else {
-                    form.style.position = '';
-                    form.style.left = ''; form.style.right = '';
-                    form.style.bottom = ''; form.style.zIndex = '';
-                }
-            }
+            floatForm();
             keepLatest();
         }
 
@@ -3295,7 +3320,15 @@ const WP_PRUNE = (() => {
      * 部品の名前は Prime の Web プレイヤー（atvwebplayersdk-nextupcard-…）のもの。
      * **本物の終わりの画面では、まだ確かめられていない**（自動操作だと終盤へ飛んだところで読み込みが止まる）。
      * 名前が変わっていても拾えるよう、文字（非表示／Hide）でも探し、見つけたカードの様子を記録に残す（nextup-seen）。
+     *
+     * **【2026-10-15 本物の終わりの画面で確かめた】** 映画の終わりの約10秒前（本編 8019 秒の作品で 7821 秒ごろ）に、
+     * 画面全体の「あなたへのおすすめ」が出て、**「開始まで残り10…」のカウントダウン**と**「自動再生を停止」ボタン**が現れる。
+     * 数え終わる（約7832秒）と次の作品へ切り替わる（ゲストの再生が別の作品へ飛んでいた原因）。
+     * 部品の名前（nextupcard）は空の枠のまま使われておらず、ボタンの名前は毎回変わる文字列。
+     * **「自動再生を停止」を押すとカウントダウンが止まり、本編（エンドロール）が最後まで流れる**（本物で確認）。
+     * 同じ画面の「非表示」は「あなたにおすすめの商品」の広告を隠すだけで、自動再生は止まらない。
      */
+    const AUTOPLAY_STOP_TEXT = /^(自動再生を停止|自動再生を止める|自動再生をオフにする|Stop autoplay|Cancel autoplay|Turn off autoplay)$/i;
     const NEXTUP_HIDE = '[class*="nextupcardhide" i], [class*="nextuphide" i], [class*="nextup-hide" i]';
     const NEXTUP_CARD = '[class*="nextupcard" i], [class*="nextup-card" i], [class*="next-up" i], [class*="upnext" i]';
     const NEXTUP_HIDE_TEXT = /^(非表示|非表示にする|Hide|クレジットを見る|Watch credits)$/i;
@@ -3775,26 +3808,19 @@ const WP_PRUNE = (() => {
             const label = (el) => `${el.textContent || ''}`.trim();
             const isHide = (el) => NEXTUP_HIDE_TEXT.test(label(el)) || NEXTUP_HIDE_TEXT.test((el.getAttribute('aria-label') || '').trim());
 
-            // 1) 名前で探す
-            let btn = Array.from(document.querySelectorAll(NEXTUP_HIDE)).find(vis);
-            let how = 'class';
             const cards = Array.from(document.querySelectorAll(NEXTUP_CARD)).filter(vis);
+            // 0) 終わりの画面の「自動再生を停止」（本物で確認した方法。いちばん先に探す）
+            const isStop = (el) => AUTOPLAY_STOP_TEXT.test(label(el)) || AUTOPLAY_STOP_TEXT.test((el.getAttribute('aria-label') || '').trim());
+            let btn = Array.from(document.querySelectorAll('button, [role="button"]')).find(el => vis(el) && isStop(el));
+            let how = 'autoplay-stop';
+            // 1) 名前で探す
+            if (!btn) { btn = Array.from(document.querySelectorAll(NEXTUP_HIDE)).find(vis); how = 'class'; }
             // 2) カードの中の「非表示」
             if (!btn) {
                 for (const card of cards) {
                     btn = Array.from(card.querySelectorAll('button, [role="button"]')).find(el => vis(el) && isHide(el));
                     if (btn) { how = 'card-text'; break; }
                 }
-            }
-            // 3) 名前が変わっていたとき：映像に重なっている「非表示」という名前のボタン
-            if (!btn) {
-                const box = this._video.getBoundingClientRect();
-                btn = Array.from(document.querySelectorAll('button, [role="button"]')).find(el => {
-                    if (!isHide(el) || !vis(el)) return false;
-                    const r = el.getBoundingClientRect();
-                    return r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom;
-                });
-                if (btn) how = 'text';
             }
             if (!btn) {
                 // カードらしいものは出ているのに押す所が見つからない。次に直せるよう、様子を記録に残す
@@ -3804,7 +3830,8 @@ const WP_PRUNE = (() => {
                 }
                 return false;
             }
-            this._nextUpAt = now;
+            // 「自動再生を停止」は押したら消える。押し直して自動再生をまた入れてしまわないよう、しばらく触らない
+            this._nextUpAt = now + (how === 'autoplay-stop' ? 19000 : 0);
             btn.click();
             this._reportDiag('nextup-hidden', { how, ...this._describeNextUp(cards.length ? cards : [btn]) });
             console.log('[wp] prime: next-up card hidden', how);
